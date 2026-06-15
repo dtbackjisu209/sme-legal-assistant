@@ -7,3 +7,4 @@ ai_legal_assistant/data/vectorstores/
 # Python cache
 __pycache__/
 *.py[cod]
+.env
