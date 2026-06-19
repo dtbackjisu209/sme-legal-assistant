@@ -1,0 +1,1 @@
+"""Legal query expansion adapters."""
