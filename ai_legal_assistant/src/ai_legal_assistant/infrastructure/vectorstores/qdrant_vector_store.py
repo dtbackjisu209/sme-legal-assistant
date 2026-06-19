@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from ai_legal_assistant.application.dto.retrieval_dto import DenseSearchResult
 from ai_legal_assistant.application.ports.vector_store_port import VectorPoint
 
 
@@ -98,6 +99,34 @@ class QdrantVectorStore:
             ],
             wait=self.wait,
         )
+
+    def search(self, query_vector: Sequence[float], top_k: int = 10) -> list[DenseSearchResult]:
+        if len(query_vector) == 0:
+            raise ValueError("query_vector cannot be empty.")
+        if top_k <= 0:
+            raise ValueError("top_k must be positive.")
+
+        response = self._client.query_points(
+            collection_name=self.collection_name,
+            query=list(query_vector),
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+        )
+        results: list[DenseSearchResult] = []
+        for point in response.points:
+            payload = dict(point.payload or {})
+            text = str(payload.pop("text", ""))
+            chunk_id = str(payload.get("chunk_id") or point.id)
+            results.append(
+                DenseSearchResult(
+                    chunk_id=chunk_id,
+                    score=float(point.score),
+                    text=text,
+                    metadata=payload,
+                )
+            )
+        return results
 
     def set_indexing_threshold(self, threshold: int) -> None:
         if threshold < 0:
