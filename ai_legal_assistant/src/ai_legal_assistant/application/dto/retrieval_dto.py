@@ -14,6 +14,27 @@ class SparseSearchResult:
 
 
 @dataclass(frozen=True)
+class DenseSearchResult:
+    chunk_id: str
+    score: float
+    text: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RetrieveLegalContextQuery:
+    query: str
+    top_k: int = 10
+
+
+@dataclass(frozen=True)
+class RetrievalEvaluationResult:
+    case_count: int
+    recall_at_k: dict[int, float]
+    mrr_at_k: dict[int, float]
+
+
+@dataclass(frozen=True)
 class BuildBM25IndexCommand:
     chunks_path: Path
     output_path: Path

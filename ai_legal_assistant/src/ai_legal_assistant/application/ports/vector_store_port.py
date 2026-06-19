@@ -4,6 +4,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from ai_legal_assistant.application.dto.retrieval_dto import DenseSearchResult
+
 
 @dataclass(frozen=True)
 class VectorPoint:
@@ -12,7 +14,12 @@ class VectorPoint:
     payload: dict[str, Any]
 
 
-class VectorStorePort(Protocol):
+class VectorSearchPort(Protocol):
+    def search(self, query_vector: Sequence[float], top_k: int = 10) -> list[DenseSearchResult]:
+        ...
+
+
+class VectorStorePort(VectorSearchPort, Protocol):
     def ensure_collection(self, vector_size: int, recreate: bool = False) -> None:
         ...
 
