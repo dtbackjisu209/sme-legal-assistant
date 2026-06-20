@@ -38,6 +38,7 @@ class FakeLLM:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = payload
         self.calls: list[tuple[str, str]] = []
+        self.schemas: list[dict[str, Any] | None] = []
 
     def generate(
         self,
@@ -45,15 +46,18 @@ class FakeLLM:
         system_prompt: str,
         user_prompt: str,
         forbidden_phrases: tuple[str, ...] = (),
+        json_schema: dict[str, Any] | None = None,
     ) -> str:
         self.calls.append((system_prompt, user_prompt))
+        self.schemas.append(json_schema)
         return json.dumps(self.payload, ensure_ascii=False)
 
 
 class SequenceLLM:
-    def __init__(self, payloads: list[dict[str, Any]]) -> None:
+    def __init__(self, payloads: list[dict[str, Any] | str]) -> None:
         self.payloads = payloads
         self.calls = 0
+        self.schemas: list[dict[str, Any] | None] = []
 
     def generate(
         self,
@@ -61,10 +65,17 @@ class SequenceLLM:
         system_prompt: str,
         user_prompt: str,
         forbidden_phrases: tuple[str, ...] = (),
+        json_schema: dict[str, Any] | None = None,
     ) -> str:
         payload = self.payloads[self.calls]
         self.calls += 1
-        return json.dumps(payload, ensure_ascii=False)
+        self.schemas.append(json_schema)
+        return payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+
+
+class InvalidJsonPlanner:
+    def plan(self, query: LegalQuery):
+        raise ValueError("LLM query planner returned invalid JSON.")
 
 
 def base_payload(
@@ -124,6 +135,77 @@ class VietnameseLegalQueryNormalizerTest(unittest.TestCase):
 
 
 class LLMQueryPlanningTest(unittest.TestCase):
+    def test_invalid_analysis_json_is_repaired_once(self) -> None:
+        repaired_payload = base_payload(query_type="exact_lookup", intent="unknown")
+        repaired_payload["analysis"]["article_number"] = {
+            "value": "47",
+            "evidence": "Điều 47",
+        }
+        llm = SequenceLLM(["{", repaired_payload])
+        planner = BuildLegalQueryPlanUseCase(
+            normalizer=VietnameseLegalQueryNormalizer(),
+            planner=LLMLegalQueryPlanner(llm=llm),
+            policy=QueryExpansionPolicy(),
+        )
+
+        plan = planner.execute("Điều 47 quy định gì?")
+
+        self.assertEqual(llm.calls, 2)
+        self.assertTrue(all(schema is not None for schema in llm.schemas))
+        self.assertEqual(plan.analysis.article_number, "47")
+
+    def test_invalid_expansion_is_repaired_once(self) -> None:
+        analysis_payload = base_payload(intent="procedure")
+        analysis_payload["analysis"]["entities"] = [
+            {"value": "giảm vốn", "evidence": "giảm vốn"}
+        ]
+        analysis_payload["analysis"]["must_terms"] = [
+            {"value": "giảm vốn", "evidence": "giảm vốn"}
+        ]
+        rejected_expansion = {
+            "semantic_variants": [],
+            "subqueries": [],
+            "lexical_terms": [],
+        }
+        repaired_expansion = {
+            "semantic_variants": [
+                {
+                    "text": "Quy định thủ tục giảm vốn",
+                    "kind": "semantic",
+                    "reason": "same legal issue",
+                }
+            ],
+            "subqueries": [],
+            "lexical_terms": ["giảm vốn"],
+        }
+        llm = SequenceLLM(
+            [analysis_payload, rejected_expansion, repaired_expansion]
+        )
+        planner = BuildLegalQueryPlanUseCase(
+            normalizer=VietnameseLegalQueryNormalizer(),
+            planner=LLMLegalQueryPlanner(llm=llm),
+            policy=QueryExpansionPolicy(),
+        )
+
+        plan = planner.execute("Thủ tục giảm vốn là gì?")
+
+        self.assertEqual(llm.calls, 3)
+        self.assertEqual(len(plan.semantic_queries), 2)
+        self.assertTrue(all(schema is not None for schema in llm.schemas))
+
+    def test_invalid_planner_json_falls_back_to_original_query(self) -> None:
+        planner = BuildLegalQueryPlanUseCase(
+            normalizer=VietnameseLegalQueryNormalizer(),
+            planner=InvalidJsonPlanner(),
+            policy=QueryExpansionPolicy(),
+        )
+
+        plan = planner.execute("Thời hạn góp vốn là bao lâu?")
+
+        self.assertEqual(len(plan.semantic_queries), 1)
+        self.assertEqual(plan.analysis.intent, "unknown")
+        self.assertIn("invalid JSON", plan.warnings[0])
+
     def test_rejected_expansion_falls_back_to_original_query(self) -> None:
         analysis_payload = base_payload(query_type="ambiguous")
         rejected_expansion = {
@@ -131,7 +213,7 @@ class LLMQueryPlanningTest(unittest.TestCase):
             "subqueries": [],
             "lexical_terms": [],
         }
-        llm = SequenceLLM([analysis_payload, rejected_expansion])
+        llm = SequenceLLM([analysis_payload, rejected_expansion, rejected_expansion])
         planner = BuildLegalQueryPlanUseCase(
             normalizer=VietnameseLegalQueryNormalizer(),
             planner=LLMLegalQueryPlanner(llm=llm),
@@ -143,7 +225,7 @@ class LLMQueryPlanningTest(unittest.TestCase):
         self.assertEqual(len(plan.semantic_queries), 1)
         self.assertEqual(plan.semantic_queries[0].kind, QueryVariantKind.ORIGINAL)
         self.assertIn("fell back", plan.warnings[0])
-        self.assertEqual(llm.calls, 2)
+        self.assertEqual(llm.calls, 3)
 
     def test_ambiguous_query_uses_analysis_and_expansion_llm_calls(self) -> None:
         payload = base_payload(query_type="ambiguous")
@@ -313,15 +395,17 @@ class LLMQueryPlanningTest(unittest.TestCase):
         self.assertEqual(len(plan.subqueries), 2)
         self.assertTrue(all("giảm vốn" in item.text for item in plan.subqueries))
 
-    def test_fake_evidence_is_rejected(self) -> None:
+    def test_fake_evidence_falls_back_to_original_query(self) -> None:
         payload = base_payload()
         payload["analysis"]["entities"] = [
             {"value": "vốn điều lệ", "evidence": "thuế thu nhập doanh nghiệp"}
         ]
         planner, _ = planner_with_payload(payload)
 
-        with self.assertRaisesRegex(ValueError, "evidence"):
-            planner.execute("Thời hạn góp vốn là bao lâu?")
+        plan = planner.execute("Thời hạn góp vốn là bao lâu?")
+
+        self.assertEqual(len(plan.semantic_queries), 1)
+        self.assertIn("rejected", plan.warnings[0])
 
     def test_policy_rejects_numbers_invented_by_expansion(self) -> None:
         query = LegalQuery("Thời hạn góp vốn là bao lâu?")

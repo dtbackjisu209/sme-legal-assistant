@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class HuggingFaceCausalLLM:
         system_prompt: str,
         user_prompt: str,
         forbidden_phrases: tuple[str, ...] = (),
+        json_schema: dict[str, Any] | None = None,
     ) -> str:
         messages = [
             {"role": "system", "content": system_prompt},
@@ -85,6 +87,7 @@ class HuggingFaceCausalLLM:
             for phrase in forbidden_phrases
             if (token_ids := self._tokenizer.encode(phrase, add_special_tokens=False))
         ]
+        prefix_allowed_tokens_fn = self._json_schema_constraint(json_schema)
         with self._torch.no_grad():
             generated = self._model.generate(
                 **inputs,
@@ -95,12 +98,31 @@ class HuggingFaceCausalLLM:
                 eos_token_id=eos_token_ids,
                 stopping_criteria=stopping_criteria,
                 bad_words_ids=bad_words_ids or None,
+                prefix_allowed_tokens_fn=prefix_allowed_tokens_fn,
             )
         new_tokens = generated[0, inputs["input_ids"].shape[1] :]
         output = self._tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
         if "</think>" in output:
             output = output.split("</think>", maxsplit=1)[1].strip()
         return output
+
+    def _json_schema_constraint(self, schema: dict[str, Any] | None):
+        if schema is None:
+            return None
+        try:
+            from lmformatenforcer import JsonSchemaParser
+            from lmformatenforcer.integrations.transformers import (
+                build_transformers_prefix_allowed_tokens_fn,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Structured planner output requires lm-format-enforcer. "
+                "Install dependencies from requirements.txt."
+            ) from exc
+        return build_transformers_prefix_allowed_tokens_fn(
+            self._tokenizer,
+            JsonSchemaParser(schema),
+        )
 
     def _json_stopping_criteria(self, prompt_length: int):
         tokenizer = self._tokenizer
