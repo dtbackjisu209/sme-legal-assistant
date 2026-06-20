@@ -137,6 +137,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--answer-max-input-tokens", type=int, default=16_384)
     parser.add_argument("--answer-max-new-tokens", type=int, default=700)
+    parser.add_argument(
+        "--answer-batch-size",
+        type=int,
+        default=1,
+        help="Number of grounded answers generated together. Use 2 first on a T4.",
+    )
+    parser.add_argument(
+        "--checkpoint-every",
+        type=int,
+        default=1,
+        help="Persist partial results after this many newly generated records.",
+    )
     parser.add_argument("--answer-trust-remote-code", action="store_true")
     parser.add_argument("--max-context-characters", type=int, default=16_000)
     parser.add_argument("--max-characters-per-context", type=int, default=3_000)
@@ -208,11 +220,17 @@ def main() -> int:
         checkpoint=JsonSubmissionCheckpoint(
             args.checkpoint_path or args.output_dir / "partial_results.json"
         ),
+        progress_callback=lambda completed, total: print(
+            f"Generated {completed}/{total} records.",
+            flush=True,
+        ),
     )
     artifact = use_case.execute(
         GenerateSubmissionCommand(
             output_dir=args.output_dir,
             retrieval_top_k=args.retrieval_top_k,
+            answer_batch_size=args.answer_batch_size,
+            checkpoint_interval=args.checkpoint_every,
         )
     )
     print(f"Generated {artifact.record_count} records.")

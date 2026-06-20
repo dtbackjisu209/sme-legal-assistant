@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -123,7 +124,7 @@ class HuggingFaceCausalLLM:
             if (token_ids := self._tokenizer.encode(phrase, add_special_tokens=False))
         ]
         prefix_allowed_tokens_fn = self._json_schema_constraint(json_schema)
-        with self._torch.no_grad():
+        with self._torch.inference_mode():
             generated = self._model.generate(
                 **inputs,
                 max_new_tokens=self.config.max_new_tokens,
@@ -140,6 +141,69 @@ class HuggingFaceCausalLLM:
         if "</think>" in output:
             output = output.split("</think>", maxsplit=1)[1].strip()
         return output
+
+    def generate_batch(
+        self,
+        *,
+        system_prompt: str,
+        user_prompts: Sequence[str],
+        forbidden_phrases: tuple[str, ...] = (),
+    ) -> tuple[str, ...]:
+        if not user_prompts:
+            return ()
+        rendered_prompts = [
+            self._tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=self.config.enable_thinking,
+            )
+            for user_prompt in user_prompts
+        ]
+        self._tokenizer.padding_side = "left"
+        if self._tokenizer.pad_token_id is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+        inputs = self._tokenizer(
+            rendered_prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.config.max_input_tokens,
+        )
+        inputs = {name: value.to(self._device) for name, value in inputs.items()}
+        prompt_length = inputs["input_ids"].shape[1]
+        eos_token_ids = [self._tokenizer.eos_token_id]
+        im_end_id = self._tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if isinstance(im_end_id, int) and im_end_id >= 0 and im_end_id not in eos_token_ids:
+            eos_token_ids.append(im_end_id)
+        bad_words_ids = [
+            token_ids
+            for phrase in forbidden_phrases
+            if (token_ids := self._tokenizer.encode(phrase, add_special_tokens=False))
+        ]
+        with self._torch.inference_mode():
+            generated = self._model.generate(
+                **inputs,
+                max_new_tokens=self.config.max_new_tokens,
+                do_sample=False,
+                use_cache=True,
+                pad_token_id=self._tokenizer.eos_token_id,
+                eos_token_id=eos_token_ids,
+                bad_words_ids=bad_words_ids or None,
+            )
+        outputs: list[str] = []
+        for sequence in generated:
+            output = self._tokenizer.decode(
+                sequence[prompt_length:],
+                skip_special_tokens=True,
+            ).strip()
+            if "</think>" in output:
+                output = output.split("</think>", maxsplit=1)[1].strip()
+            outputs.append(output)
+        return tuple(outputs)
 
     def _json_schema_constraint(self, schema: dict[str, Any] | None):
         if schema is None:

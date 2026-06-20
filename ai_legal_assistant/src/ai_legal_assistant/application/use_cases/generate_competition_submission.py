@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from ai_legal_assistant.application.dto.answer_generation_dto import (
+    GenerateGroundedAnswerRequest,
+)
 from ai_legal_assistant.application.dto.retrieval_dto import RetrieveLegalContextQuery
 from ai_legal_assistant.application.dto.submission_dto import (
     GenerateSubmissionCommand,
@@ -34,10 +38,15 @@ class GenerateCompetitionSubmissionUseCase:
     validator: SubmissionValidator
     artifact_writer: SubmissionArtifactPort
     checkpoint: SubmissionCheckpointPort | None = None
+    progress_callback: Callable[[int, int], None] | None = None
 
     def execute(self, command: GenerateSubmissionCommand) -> SubmissionArtifact:
         if command.retrieval_top_k <= 0:
             raise ValueError("retrieval_top_k must be positive.")
+        if command.answer_batch_size <= 0:
+            raise ValueError("answer_batch_size must be positive.")
+        if command.checkpoint_interval <= 0:
+            raise ValueError("checkpoint_interval must be positive.")
 
         questions = self.question_source.load()
         saved_records_by_id: dict[int, SubmissionRecord] = {}
@@ -48,6 +57,50 @@ class GenerateCompetitionSubmissionUseCase:
                 record.question_id: record for record in saved_records
             }
         records: list[SubmissionRecord] = []
+        pending_answers: list[GenerateGroundedAnswerRequest] = []
+        unsaved_record_count = 0
+
+        def persist_checkpoint(*, force: bool = False) -> None:
+            nonlocal unsaved_record_count
+            if self.checkpoint is None:
+                return
+            if force or unsaved_record_count >= command.checkpoint_interval:
+                self.checkpoint.save(records)
+                unsaved_record_count = 0
+
+        def generate_pending_answers() -> None:
+            nonlocal unsaved_record_count
+            if not pending_answers:
+                return
+            requests = tuple(pending_answers)
+            pending_answers.clear()
+            answers = self.answer_generator.generate_batch(requests=requests)
+            if len(answers) != len(requests):
+                raise ValueError("answer generator returned an unexpected batch size.")
+            for request, answer in zip(requests, answers, strict=True):
+                citations = tuple(
+                    context.citation
+                    for context in request.contexts
+                    if context.citation is not None
+                )
+                records.append(
+                    SubmissionRecord(
+                        question_id=request.question.question_id,
+                        question=request.question.question,
+                        answer=answer.strip(),
+                        relevant_docs=tuple(
+                            dict.fromkeys(citation.document_entry for citation in citations)
+                        ),
+                        relevant_articles=tuple(
+                            dict.fromkeys(citation.article_entry for citation in citations)
+                        ),
+                    )
+                )
+                unsaved_record_count += 1
+            persist_checkpoint()
+            if self.progress_callback is not None:
+                self.progress_callback(len(records), len(questions))
+
         for question in questions:
             saved_record = saved_records_by_id.get(question.question_id)
             if saved_record is not None:
@@ -60,25 +113,21 @@ class GenerateCompetitionSubmissionUseCase:
                 )
             )
             contexts = self.citation_resolver.resolve(hits)
-            answer = self.answer_generator.generate(question=question, contexts=contexts)
-            citations = tuple(
-                context.citation for context in contexts if context.citation is not None
-            )
-            records.append(
-                SubmissionRecord(
-                    question_id=question.question_id,
-                    question=question.question,
-                    answer=answer.strip(),
-                    relevant_docs=tuple(
-                        dict.fromkeys(citation.document_entry for citation in citations)
-                    ),
-                    relevant_articles=tuple(
-                        dict.fromkeys(citation.article_entry for citation in citations)
-                    ),
+            pending_answers.append(
+                GenerateGroundedAnswerRequest(
+                    question=question,
+                    contexts=tuple(contexts),
                 )
             )
-            if self.checkpoint is not None:
-                self.checkpoint.save(records)
+            if len(pending_answers) >= command.answer_batch_size:
+                generate_pending_answers()
+
+        generate_pending_answers()
+        question_order = {
+            question.question_id: index for index, question in enumerate(questions)
+        }
+        records.sort(key=lambda record: question_order[record.question_id])
+        persist_checkpoint(force=True)
 
         self.validator.validate(records, questions)
         artifact = self.artifact_writer.write(records=records, output_dir=command.output_dir)
