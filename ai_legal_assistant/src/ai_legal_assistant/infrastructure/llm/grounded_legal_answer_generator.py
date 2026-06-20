@@ -3,6 +3,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from ai_legal_assistant.application.dto.answer_generation_dto import (
+    GenerateGroundedAnswerRequest,
+)
 from ai_legal_assistant.application.ports.llm_port import TextGenerationPort
 from ai_legal_assistant.domain.entities.competition_submission import (
     CompetitionQuestion,
@@ -61,6 +64,48 @@ class GroundedLegalAnswerGenerator:
         if not answer:
             raise ValueError(f"Answer model returned an empty answer for id={question.question_id}.")
         return answer
+
+    def generate_batch(
+        self,
+        *,
+        requests: Sequence[GenerateGroundedAnswerRequest],
+    ) -> tuple[str, ...]:
+        if not requests:
+            return ()
+        prompts = tuple(self._build_user_prompt(request) for request in requests)
+        answers = self.llm.generate_batch(
+            system_prompt=SYSTEM_PROMPT,
+            user_prompts=prompts,
+        )
+        if len(answers) != len(requests):
+            raise ValueError("LLM returned an unexpected batch size.")
+        cleaned_answers = tuple(answer.strip() for answer in answers)
+        empty_request = next(
+            (
+                request
+                for request, answer in zip(requests, cleaned_answers, strict=True)
+                if not answer
+            ),
+            None,
+        )
+        if empty_request is not None:
+            raise ValueError(
+                "Answer model returned an empty answer for "
+                f"id={empty_request.question.question_id}."
+            )
+        return cleaned_answers
+
+    def _build_user_prompt(self, request: GenerateGroundedAnswerRequest) -> str:
+        if not request.contexts:
+            raise ValueError(
+                "No legal context was retrieved for "
+                f"question id={request.question.question_id}."
+            )
+        return (
+            f"CÂU HỎI:\n{request.question.question}\n\n"
+            f"NGỮ CẢNH PHÁP LÝ:\n{self._render_contexts(request.contexts)}\n\n"
+            "Hãy trả lời câu hỏi chỉ dựa trên các căn cứ trên."
+        )
 
     def _render_contexts(self, contexts: Sequence[ResolvedLegalContext]) -> str:
         rendered: list[str] = []
