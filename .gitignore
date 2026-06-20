@@ -3,6 +3,9 @@ ai_legal_assistant/data/processed/
 ai_legal_assistant/data/raw/
 ai_legal_assistant/data/indexes/
 ai_legal_assistant/data/vectorstores/
+ai_legal_assistant/data/embeddings/
+ai_legal_assistant/data/eval/
+ai_legal_assistant/data/transfer/
 
 # Python cache
 __pycache__/
