@@ -12,6 +12,7 @@ class HuggingFaceCausalLLMConfig:
     max_new_tokens: int = 500
     trust_remote_code: bool = False
     enable_thinking: bool = False
+    load_in_4bit: bool = False
 
 
 class HuggingFaceCausalLLM:
@@ -39,18 +40,48 @@ class HuggingFaceCausalLLM:
         self._stopping_criteria_base = StoppingCriteria
         self._stopping_criteria_list = StoppingCriteriaList
         self._device = config.device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if config.load_in_4bit and not self._device.startswith("cuda"):
+            raise ValueError("load_in_4bit requires a CUDA device.")
         self._tokenizer = AutoTokenizer.from_pretrained(
             config.model_name_or_path,
             trust_remote_code=config.trust_remote_code,
         )
-        dtype = "auto" if self._device.startswith("cuda") else torch.float32
+        load_options: dict[str, Any] = {
+            "trust_remote_code": config.trust_remote_code,
+        }
+        if config.load_in_4bit:
+            try:
+                from transformers import BitsAndBytesConfig
+            except ImportError as exc:
+                raise RuntimeError(
+                    "4-bit model loading requires bitsandbytes. "
+                    "Install dependencies from requirements.txt."
+                ) from exc
+            load_options.update(
+                torch_dtype=torch.float16,
+                quantization_config=BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                ),
+                device_map={"": self._cuda_device_name()},
+            )
+        else:
+            load_options["torch_dtype"] = (
+                "auto" if self._device.startswith("cuda") else torch.float32
+            )
+
         self._model = AutoModelForCausalLM.from_pretrained(
             config.model_name_or_path,
-            dtype=dtype,
-            trust_remote_code=config.trust_remote_code,
+            **load_options,
         )
-        self._model.to(self._device)
+        if not config.load_in_4bit:
+            self._model.to(self._device)
         self._model.eval()
+
+    def _cuda_device_name(self) -> str:
+        return "cuda:0" if self._device == "cuda" else self._device
 
     def generate(
         self,
@@ -77,7 +108,11 @@ class HuggingFaceCausalLLM:
             max_length=self.config.max_input_tokens,
         )
         inputs = {name: value.to(self._device) for name, value in inputs.items()}
-        stopping_criteria = self._json_stopping_criteria(inputs["input_ids"].shape[1])
+        stopping_criteria = (
+            self._json_stopping_criteria(inputs["input_ids"].shape[1])
+            if json_schema is not None
+            else None
+        )
         eos_token_ids = [self._tokenizer.eos_token_id]
         im_end_id = self._tokenizer.convert_tokens_to_ids("<|im_end|>")
         if isinstance(im_end_id, int) and im_end_id >= 0 and im_end_id not in eos_token_ids:
