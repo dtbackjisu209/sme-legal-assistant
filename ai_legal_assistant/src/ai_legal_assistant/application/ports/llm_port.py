@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class TextGenerationPort(Protocol):
@@ -10,5 +10,6 @@ class TextGenerationPort(Protocol):
         system_prompt: str,
         user_prompt: str,
         forbidden_phrases: tuple[str, ...] = (),
+        json_schema: dict[str, Any] | None = None,
     ) -> str:
         ...
