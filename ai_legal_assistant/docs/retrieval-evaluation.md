@@ -62,3 +62,17 @@ that detail was not recorded during corpus embedding.
 
 To evaluate conditional query expansion with weighted RRF, add `--expand-query`. Keep
 the command without this flag as the dense baseline and compare both on the same testset.
+
+To evaluate expanded hybrid retrieval (dense HNSW + BM25), add both flags:
+
+```powershell
+python scripts/evaluate_retrieval.py `
+  --cutoffs 1,3,5,10,20 `
+  --expand-query `
+  --use-bm25 `
+  --per-query-top-k 20
+```
+
+Add `--use-reranker` to measure the complete pipeline. Report dense baseline, hybrid
+without reranking, and hybrid with reranking as separate runs so the contribution of each
+stage remains visible.

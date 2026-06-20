@@ -10,8 +10,11 @@ raw query
   -> Qwen3 query analysis and conditional expansion
   -> evidence and drift validation
   -> QueryPlan
-  -> per-query dense retrieval
-  -> weighted reciprocal-rank fusion
+  -> per-query dense HNSW and BM25 retrieval (oversampled)
+  -> runtime content identity and per-list deduplication
+  -> per-scope and global weighted reciprocal-rank fusion
+  -> cross-encoder intent-aware reranking
+  -> scope-aware selection and per-article cap
 ```
 
 ## QueryPlan rules
@@ -59,9 +62,27 @@ python scripts/query_qdrant.py `
 Use `--retrieval-mode baseline` only when a single-query baseline is explicitly needed.
 
 Each semantic query is embedded with the same `Qwen/Qwen3-Embedding-0.6B` pipeline as
-the corpus. Results are deduplicated by `chunk_id` and fused with weighted RRF. The
-original query has weight `1.0`; LLM-generated variants receive policy-controlled weights
-from `0.7` to `0.85`.
+the corpus and is also searched against the BM25 index. Validated lexical terms are added
+to the sparse query when absent from the semantic query. Dense and sparse lists are
+deduplicated by `chunk_id` and fused with weighted RRF. The original query has weight
+`1.0`; BM25 contributes with weight `0.7` by default.
+
+Use `--disable-bm25` for a dense-only interactive comparison. Build a missing index with
+`python scripts/build_bm25_index.py`.
+
+Runtime retrieval requests `per_query_top_k * oversample_factor` hits from each modality,
+then keeps unique content using a stable hash of `article_id` and normalized text. This
+avoids relying on legacy `chunk_id` values that collide in the current corpus. Ambiguous
+plans reserve candidates from every validated scope before reranking. Final selection
+keeps at most one chunk per article for ambiguous queries (two for other query types).
+For ambiguous queries with an enabled reranker, additional hits must remain within the
+configured `scope_relevance_margin` of the weakest required-scope result. The system may
+therefore return fewer than `top_k` results rather than fill the context with weak evidence.
+
+The interactive command enables `BAAI/bge-reranker-v2-m3` by default. Use
+`--disable-reranker` only for A/B evaluation or when the reranker model is unavailable.
+The final hit metadata includes `content_id`, `legacy_chunk_ids`, `matched_scopes`,
+`rrf_score`, and `rerank_score`.
 
 ## A/B evaluation
 

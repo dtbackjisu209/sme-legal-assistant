@@ -54,6 +54,7 @@ class WeightedQuery:
     weight: float
     kind: QueryVariantKind
     reason: str
+    scope: str | None = None
 
     def __post_init__(self) -> None:
         normalized = self.text.strip()

@@ -18,7 +18,7 @@ from ai_legal_assistant.domain.services.retrieval_metrics import RetrievalMetric
 from ai_legal_assistant.infrastructure.bootstrap.retrieval import (
     DenseRetrievalConfig,
     build_dense_retriever,
-    build_expanded_dense_retriever,
+    build_expanded_retriever,
 )
 from ai_legal_assistant.infrastructure.embeddings.qwen3_query_embedder import (
     DEFAULT_QUERY_INSTRUCTION,
@@ -29,10 +29,11 @@ from ai_legal_assistant.infrastructure.persistence.jsonl_retrieval_testset impor
 
 
 DEFAULT_MODEL = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate Qdrant dense retrieval with Recall/MRR.")
+    parser = argparse.ArgumentParser(description="Evaluate legal retrieval with Recall/MRR.")
     parser.add_argument(
         "--testset",
         type=Path,
@@ -57,6 +58,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cutoffs", default="1,3,5,10,20")
     parser.add_argument("--expand-query", action="store_true")
     parser.add_argument("--per-query-top-k", type=int, default=20)
+    parser.add_argument(
+        "--bm25-index",
+        type=Path,
+        default=ROOT_DIR / "data" / "indexes" / "bm25_index.pkl",
+    )
+    parser.add_argument("--bm25-weight", type=float, default=0.7)
+    parser.add_argument(
+        "--use-bm25",
+        action="store_true",
+        help="Use BM25 alongside dense retrieval when --expand-query is enabled.",
+    )
+    parser.add_argument("--use-reranker", action="store_true")
+    parser.add_argument(
+        "--reranker-model",
+        default=os.getenv("RERANKER_MODEL", DEFAULT_RERANKER_MODEL),
+    )
+    parser.add_argument("--reranker-device", default=os.getenv("RERANKER_DEVICE"))
+    parser.add_argument("--reranker-batch-size", type=int, default=8)
+    parser.add_argument("--reranker-max-length", type=int, default=512)
+    parser.add_argument("--oversample-factor", type=int, default=5)
+    parser.add_argument("--candidate-pool-size", type=int, default=50)
+    parser.add_argument("--scope-relevance-margin", type=float, default=0.15)
     parser.add_argument(
         "--planner-model",
         default=os.getenv("QUERY_PLANNER_MODEL", "Qwen/Qwen3-0.6B"),
@@ -103,9 +126,18 @@ def main() -> int:
         planner_max_input_tokens=args.planner_max_input_tokens,
         planner_max_new_tokens=args.planner_max_new_tokens,
         planner_trust_remote_code=args.planner_trust_remote_code,
+        bm25_index_path=args.bm25_index if args.use_bm25 else None,
+        bm25_weight=args.bm25_weight,
+        reranker_model_name_or_path=(args.reranker_model if args.use_reranker else None),
+        reranker_device=args.reranker_device,
+        reranker_batch_size=args.reranker_batch_size,
+        reranker_max_length=args.reranker_max_length,
+        oversample_factor=args.oversample_factor,
+        candidate_pool_size=args.candidate_pool_size,
+        scope_relevance_margin=args.scope_relevance_margin,
     )
     if args.expand_query:
-        retriever = build_expanded_dense_retriever(
+        retriever = build_expanded_retriever(
             config,
             per_query_top_k=args.per_query_top_k,
         )
