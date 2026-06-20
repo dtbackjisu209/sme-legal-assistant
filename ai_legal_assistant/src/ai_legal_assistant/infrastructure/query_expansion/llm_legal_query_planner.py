@@ -147,6 +147,151 @@ không có số mới; không phải câu trả lời; kind đúng. Không in ch
 """
 
 
+_EVIDENCED_VALUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["value", "evidence"],
+    "properties": {
+        "value": {"type": "string"},
+        "evidence": {"type": "string"},
+    },
+}
+
+_ANALYSIS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "intent",
+        "query_type",
+        "legal_domain",
+        "entities",
+        "company_type",
+        "article_number",
+        "clause_number",
+        "document_number",
+        "temporal_scope",
+        "must_terms",
+    ],
+    "properties": {
+        "intent": {
+            "enum": [
+                "deadline",
+                "penalty",
+                "procedure",
+                "definition",
+                "obligation",
+                "eligibility",
+                "unknown",
+            ]
+        },
+        "query_type": {
+            "enum": [
+                "exact_lookup",
+                "legal_concept",
+                "legal_situation",
+                "multi_issue",
+                "ambiguous",
+            ]
+        },
+        "legal_domain": {
+            "anyOf": [
+                {
+                    "enum": [
+                        "enterprise",
+                        "labor",
+                        "tax",
+                        "social_insurance",
+                        "civil",
+                        "investment",
+                        "securities",
+                        "unknown",
+                    ]
+                },
+                {"type": "null"},
+            ]
+        },
+        "entities": {"type": "array", "items": _EVIDENCED_VALUE_SCHEMA},
+        "company_type": {
+            "anyOf": [
+                {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["value", "evidence"],
+                    "properties": {
+                        "value": {
+                            "enum": [
+                                "limited_liability",
+                                "limited_liability_one_member",
+                                "limited_liability_two_or_more",
+                                "joint_stock",
+                                "partnership",
+                                "private_enterprise",
+                                "cooperative",
+                            ]
+                        },
+                        "evidence": {"type": "string"},
+                    },
+                },
+                {"type": "null"},
+            ]
+        },
+        "article_number": {"anyOf": [_EVIDENCED_VALUE_SCHEMA, {"type": "null"}]},
+        "clause_number": {"anyOf": [_EVIDENCED_VALUE_SCHEMA, {"type": "null"}]},
+        "document_number": {"anyOf": [_EVIDENCED_VALUE_SCHEMA, {"type": "null"}]},
+        "temporal_scope": {"enum": ["current", "historical"]},
+        "must_terms": {"type": "array", "items": _EVIDENCED_VALUE_SCHEMA},
+    },
+}
+
+_EXPANSION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["semantic_variants", "subqueries", "lexical_terms"],
+    "properties": {
+        "semantic_variants": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["text", "kind", "reason"],
+                "properties": {
+                    "text": {"type": "string"},
+                    "kind": {"enum": ["semantic", "scope"]},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+        "subqueries": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["text", "reason"],
+                "properties": {
+                    "text": {"type": "string"},
+                    "reason": {"type": "string"},
+                },
+            },
+        },
+        "lexical_terms": {"type": "array", "items": {"type": "string"}},
+    },
+}
+
+_ANALYSIS_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["analysis", "semantic_variants", "subqueries", "lexical_terms"],
+    "properties": {
+        "analysis": _ANALYSIS_SCHEMA,
+        **_EXPANSION_SCHEMA["properties"],
+    },
+}
+
+ANALYSIS_REPAIR_PROMPT = """Repair the planner output for one Vietnamese legal query.
+Return exactly one JSON object matching the supplied schema. Do not answer the legal question.
+Preserve only facts and legal references explicitly present in the query. Do not use Markdown."""
+
+
 @dataclass
 class LLMLegalQueryPlanner:
     llm: TextGenerationPort
@@ -172,11 +317,10 @@ class LLMLegalQueryPlanner:
     def plan(self, query: LegalQuery) -> QueryPlanningDraft:
         raw_output = self.llm.generate(
             system_prompt=ANALYSIS_PROMPT,
+            json_schema=_ANALYSIS_RESPONSE_SCHEMA,
             user_prompt=f"QUERY CHUẨN HÓA:\n{query.text}\n\nChỉ xuất JSON:",
         )
-        payload = self._parse_json(raw_output)
-        analysis_draft = self._to_draft(payload, query)
-        self._validate_analysis_consistency(analysis_draft.analysis)
+        analysis_draft = self._analysis_draft_with_repair(query, raw_output)
         if analysis_draft.analysis.query_type == QueryType.EXACT_LOOKUP:
             return QueryPlanningDraft(
                 analysis=analysis_draft.analysis,
@@ -187,11 +331,50 @@ class LLMLegalQueryPlanner:
             expanded_draft = self._repair_expansion(query, analysis_draft.analysis)
             self._validate_draft_consistency(expanded_draft, query)
         except ValueError as exc:
-            raise QueryExpansionRejectedError(
-                "LLM expansion was rejected; retrieval fell back to the original query only.",
-                analysis_draft.analysis,
-            ) from exc
+            try:
+                expanded_draft = self._repair_expansion(
+                    query,
+                    analysis_draft.analysis,
+                    rejection_reason=str(exc),
+                )
+                self._validate_draft_consistency(expanded_draft, query)
+            except ValueError as repair_exc:
+                raise QueryExpansionRejectedError(
+                    "LLM expansion remained invalid after one repair; "
+                    "retrieval fell back to the original query only.",
+                    analysis_draft.analysis,
+                ) from repair_exc
         return expanded_draft
+
+    def _analysis_draft_with_repair(
+        self,
+        query: LegalQuery,
+        raw_output: str,
+    ) -> QueryPlanningDraft:
+        try:
+            payload = self._parse_json(raw_output)
+            draft = self._to_draft(payload, query)
+            self._validate_analysis_consistency(draft.analysis)
+            return draft
+        except ValueError as exc:
+            repaired_output = self.llm.generate(
+                system_prompt=ANALYSIS_REPAIR_PROMPT,
+                user_prompt=(
+                    f"QUERY:\n{query.text}\n\n"
+                    f"The previous planner output was rejected: {exc}\n"
+                    "Generate a corrected planner JSON object now."
+                ),
+                json_schema=_ANALYSIS_RESPONSE_SCHEMA,
+            )
+            try:
+                payload = self._parse_json(repaired_output)
+                draft = self._to_draft(payload, query)
+                self._validate_analysis_consistency(draft.analysis)
+                return draft
+            except ValueError as repair_exc:
+                raise ValueError(
+                    "LLM analysis remained invalid after one repair."
+                ) from repair_exc
 
     @staticmethod
     def _validate_analysis_consistency(analysis: QueryAnalysis) -> None:
@@ -296,6 +479,7 @@ class LLMLegalQueryPlanner:
         self,
         query: LegalQuery,
         analysis: QueryAnalysis,
+        rejection_reason: str | None = None,
     ) -> QueryPlanningDraft:
         analysis_context = {
             "intent": analysis.intent,
@@ -306,8 +490,17 @@ class LLMLegalQueryPlanner:
             "temporal_scope": analysis.temporal_scope.value,
             "must_terms": list(analysis.must_terms),
         }
+        system_prompt = EXPANSION_REPAIR_PROMPT
+        if rejection_reason is not None:
+            system_prompt = (
+                f"{EXPANSION_REPAIR_PROMPT}\n\n"
+                "The previous expansion was rejected for this reason: "
+                f"{rejection_reason}\n"
+                "Generate a corrected expansion that satisfies every constraint."
+            )
         raw_output = self.llm.generate(
-            system_prompt=EXPANSION_REPAIR_PROMPT,
+            system_prompt=system_prompt,
+            json_schema=_EXPANSION_SCHEMA,
             user_prompt=(
                 f"QUERY CHUẨN HÓA:\n{query.text}\n\n"
                 f"ANALYSIS ĐÃ XÁC THỰC:\n"
