@@ -72,8 +72,36 @@ class StaticCitationResolver:
 
 
 class StaticAnswerGenerator:
+    def __init__(self) -> None:
+        self.batch_question_ids: list[list[int]] = []
+
     def generate(self, *, question, contexts):
         return "Doanh nghiệp được hỗ trợ theo Điều 4 của Luật 04/2017/QH14."
+
+
+    def generate_batch(self, *, requests):
+        self.batch_question_ids.append(
+            [request.question.question_id for request in requests]
+        )
+        return tuple(
+            self.generate(question=request.question, contexts=request.contexts)
+            for request in requests
+        )
+
+
+class RecordingCheckpoint:
+    def __init__(self) -> None:
+        self.saved_sizes: list[int] = []
+        self.cleared = False
+
+    def load(self):
+        return []
+
+    def save(self, records):
+        self.saved_sizes.append(len(records))
+
+    def clear(self):
+        self.cleared = True
 
 
 class CompetitionSubmissionTest(unittest.TestCase):
@@ -101,6 +129,38 @@ class CompetitionSubmissionTest(unittest.TestCase):
             with zipfile.ZipFile(artifact.zip_path) as archive:
                 self.assertEqual(archive.namelist(), ["results.json"])
                 self.assertEqual(archive.read("results.json"), artifact.results_path.read_bytes())
+
+    def test_pipeline_batches_answers_and_checkpoints_by_interval(self) -> None:
+        questions = [
+            CompetitionQuestion(question_id=index, question=f"Question {index}")
+            for index in range(1, 6)
+        ]
+        answer_generator = StaticAnswerGenerator()
+        checkpoint = RecordingCheckpoint()
+        with tempfile.TemporaryDirectory() as directory:
+            use_case = GenerateCompetitionSubmissionUseCase(
+                question_source=StaticQuestionSource(questions),
+                retriever=StaticRetriever(),
+                citation_resolver=StaticCitationResolver(),
+                answer_generator=answer_generator,
+                validator=SubmissionValidator(),
+                artifact_writer=SubmissionArtifactWriter(),
+                checkpoint=checkpoint,
+            )
+
+            artifact = use_case.execute(
+                GenerateSubmissionCommand(
+                    output_dir=Path(directory),
+                    retrieval_top_k=3,
+                    answer_batch_size=2,
+                    checkpoint_interval=3,
+                )
+            )
+
+        self.assertEqual(artifact.record_count, 5)
+        self.assertEqual(answer_generator.batch_question_ids, [[1, 2], [3, 4], [5]])
+        self.assertEqual(checkpoint.saved_sizes, [4, 5])
+        self.assertTrue(checkpoint.cleared)
 
     def test_validator_rejects_missing_test_question(self) -> None:
         expected = [
