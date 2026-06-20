@@ -130,6 +130,11 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("--answer-model", default=os.getenv("ANSWER_MODEL", DEFAULT_ANSWER_MODEL))
     parser.add_argument("--answer-device", default=os.getenv("ANSWER_DEVICE"))
+    parser.add_argument(
+        "--answer-load-in-4bit",
+        action="store_true",
+        help="Load the answer model with NF4 quantization; requires CUDA and bitsandbytes.",
+    )
     parser.add_argument("--answer-max-input-tokens", type=int, default=16_384)
     parser.add_argument("--answer-max-new-tokens", type=int, default=700)
     parser.add_argument("--answer-trust-remote-code", action="store_true")
@@ -184,6 +189,7 @@ def main() -> int:
             max_new_tokens=args.answer_max_new_tokens,
             trust_remote_code=args.answer_trust_remote_code,
             enable_thinking=False,
+            load_in_4bit=args.answer_load_in_4bit,
         )
     )
     use_case = GenerateCompetitionSubmissionUseCase(
