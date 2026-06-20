@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from ai_legal_assistant.application.ports.embedding_port import QueryEmbeddingPort
@@ -23,6 +24,11 @@ from ai_legal_assistant.infrastructure.embeddings.ollama_query_embedder import (
     OllamaQueryEmbedderConfig,
 )
 from ai_legal_assistant.infrastructure.vectorstores.qdrant_vector_store import QdrantVectorStore
+from ai_legal_assistant.infrastructure.search.bm25_search import BM25Search
+from ai_legal_assistant.infrastructure.rerankers.cross_encoder_reranker import (
+    CrossEncoderReranker,
+    CrossEncoderRerankerConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,19 @@ class DenseRetrievalConfig:
     planner_max_input_tokens: int = 4096
     planner_max_new_tokens: int = 500
     planner_trust_remote_code: bool = False
+    bm25_index_path: Path | None = None
+    bm25_weight: float = 0.7
+    reranker_model_name_or_path: str | None = None
+    reranker_device: str | None = None
+    reranker_batch_size: int = 8
+    reranker_max_length: int = 512
+    reranker_trust_remote_code: bool = False
+    oversample_factor: int = 5
+    candidate_pool_size: int = 50
+    scope_candidates_per_branch: int = 5
+    max_chunks_per_article: int = 2
+    ambiguous_max_chunks_per_article: int = 1
+    scope_relevance_margin: float = 0.15
 
 
 def build_dense_retriever(config: DenseRetrievalConfig) -> RetrieveLegalContextUseCase:
@@ -54,12 +73,30 @@ def build_dense_retriever(config: DenseRetrievalConfig) -> RetrieveLegalContextU
     )
 
 
-def build_expanded_dense_retriever(
+def build_expanded_retriever(
     config: DenseRetrievalConfig,
     *,
     per_query_top_k: int = 20,
 ) -> RetrieveExpandedLegalContextUseCase:
     query_embedder, vector_store = _build_retrieval_adapters(config)
+    sparse_search = (
+        BM25Search.from_path(config.bm25_index_path)
+        if config.bm25_index_path is not None
+        else None
+    )
+    reranker = (
+        CrossEncoderReranker(
+            CrossEncoderRerankerConfig(
+                model_name_or_path=config.reranker_model_name_or_path,
+                device=config.reranker_device,
+                batch_size=config.reranker_batch_size,
+                max_length=config.reranker_max_length,
+                trust_remote_code=config.reranker_trust_remote_code,
+            )
+        )
+        if config.reranker_model_name_or_path is not None
+        else None
+    )
     return RetrieveExpandedLegalContextUseCase(
         query_planner=build_query_planner(
             QueryPlannerConfig(
@@ -75,6 +112,15 @@ def build_expanded_dense_retriever(
         expected_vector_size=config.vector_size,
         fusion=WeightedReciprocalRankFusion(),
         per_query_top_k=per_query_top_k,
+        sparse_search=sparse_search,
+        sparse_weight=config.bm25_weight,
+        reranker=reranker,
+        oversample_factor=config.oversample_factor,
+        candidate_pool_size=config.candidate_pool_size,
+        scope_candidates_per_branch=config.scope_candidates_per_branch,
+        max_chunks_per_article=config.max_chunks_per_article,
+        ambiguous_max_chunks_per_article=config.ambiguous_max_chunks_per_article,
+        scope_relevance_margin=config.scope_relevance_margin,
     )
 
 

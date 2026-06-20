@@ -176,6 +176,14 @@ class LLMQueryPlanningTest(unittest.TestCase):
 
         self.assertEqual(plan.analysis.query_type, QueryType.AMBIGUOUS)
         self.assertEqual(len(plan.semantic_queries), 4)
+        self.assertEqual(
+            {query.scope for query in plan.semantic_queries[1:]},
+            {
+                "limited_liability_one_member",
+                "limited_liability_two_or_more",
+                "joint_stock",
+            },
+        )
         self.assertEqual(len(llm.calls), 2)
         self.assertIn("Thời hạn góp đủ vốn điều lệ", llm.calls[0][1])
         self.assertIn("ĐÚNG 3 phần tử", llm.calls[1][0])
