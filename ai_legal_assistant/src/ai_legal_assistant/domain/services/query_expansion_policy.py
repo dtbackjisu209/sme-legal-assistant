@@ -125,7 +125,18 @@ class QueryExpansionPolicy:
             if key in seen:
                 continue
             seen.add(key)
-            selected.append(candidate)
+            scope = candidate.scope
+            if candidate.kind == QueryVariantKind.SCOPE and scope is None:
+                scope = QueryExpansionPolicy._detect_company_type(candidate.text.casefold())
+            selected.append(
+                WeightedQuery(
+                    text=candidate.text,
+                    weight=candidate.weight,
+                    kind=candidate.kind,
+                    reason=candidate.reason,
+                    scope=scope,
+                )
+            )
             if len(selected) >= limit:
                 break
         return tuple(selected)
@@ -158,14 +169,7 @@ class QueryExpansionPolicy:
         expected = analysis.company_type
         if expected is None:
             return True
-        detected = next(
-            (
-                company_type
-                for marker, company_type in QueryExpansionPolicy.COMPANY_TYPE_MARKERS
-                if marker in candidate
-            ),
-            None,
-        )
+        detected = QueryExpansionPolicy._detect_company_type(candidate)
         if expected == "limited_liability":
             return detected in {
                 "limited_liability",
@@ -173,6 +177,17 @@ class QueryExpansionPolicy:
                 "limited_liability_two_or_more",
             }
         return detected == expected
+
+    @staticmethod
+    def _detect_company_type(candidate: str) -> str | None:
+        return next(
+            (
+                company_type
+                for marker, company_type in QueryExpansionPolicy.COMPANY_TYPE_MARKERS
+                if marker in candidate
+            ),
+            None,
+        )
 
     @staticmethod
     def _safe_lexical_terms(
