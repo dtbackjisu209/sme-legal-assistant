@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ai_legal_assistant.application.dto.answer_generation_dto import (
     GenerateGroundedAnswerRequest,
@@ -24,6 +24,10 @@ from ai_legal_assistant.application.ports.retriever_port import LegalContextRetr
 from ai_legal_assistant.application.ports.submission_artifact_port import SubmissionArtifactPort
 from ai_legal_assistant.application.ports.submission_checkpoint_port import SubmissionCheckpointPort
 from ai_legal_assistant.domain.entities.competition_submission import SubmissionRecord
+from ai_legal_assistant.domain.services.submission_citation_selector import (
+    SubmissionCitationSelection,
+    SubmissionCitationSelector,
+)
 from ai_legal_assistant.domain.services.submission_validator import SubmissionValidator
 
 
@@ -37,6 +41,9 @@ class GenerateCompetitionSubmissionUseCase:
     answer_generator: LegalAnswerGeneratorPort
     validator: SubmissionValidator
     artifact_writer: SubmissionArtifactPort
+    citation_selector: SubmissionCitationSelector = field(
+        default_factory=SubmissionCitationSelector
+    )
     checkpoint: SubmissionCheckpointPort | None = None
     progress_callback: Callable[[int, int], None] | None = None
 
@@ -58,6 +65,7 @@ class GenerateCompetitionSubmissionUseCase:
             }
         records: list[SubmissionRecord] = []
         pending_answers: list[GenerateGroundedAnswerRequest] = []
+        pending_citations: list[SubmissionCitationSelection] = []
         unsaved_record_count = 0
 
         def persist_checkpoint(*, force: bool = False) -> None:
@@ -73,27 +81,27 @@ class GenerateCompetitionSubmissionUseCase:
             if not pending_answers:
                 return
             requests = tuple(pending_answers)
+            citation_selections = tuple(pending_citations)
             pending_answers.clear()
+            pending_citations.clear()
             answers = self.answer_generator.generate_batch(requests=requests)
             if len(answers) != len(requests):
                 raise ValueError("answer generator returned an unexpected batch size.")
-            for request, answer in zip(requests, answers, strict=True):
-                citations = tuple(
-                    context.citation
-                    for context in request.contexts
-                    if context.citation is not None
-                )
+            if len(citation_selections) != len(requests):
+                raise ValueError("citation selector returned an unexpected batch size.")
+            for request, answer, citation_selection in zip(
+                requests,
+                answers,
+                citation_selections,
+                strict=True,
+            ):
                 records.append(
                     SubmissionRecord(
                         question_id=request.question.question_id,
                         question=request.question.question,
                         answer=answer.strip(),
-                        relevant_docs=tuple(
-                            dict.fromkeys(citation.document_entry for citation in citations)
-                        ),
-                        relevant_articles=tuple(
-                            dict.fromkeys(citation.article_entry for citation in citations)
-                        ),
+                        relevant_docs=citation_selection.relevant_docs,
+                        relevant_articles=citation_selection.relevant_articles,
                     )
                 )
                 unsaved_record_count += 1
@@ -113,12 +121,18 @@ class GenerateCompetitionSubmissionUseCase:
                 )
             )
             contexts = self.citation_resolver.resolve(hits)
+            citation_selection = self.citation_selector.select(
+                question=question.question,
+                hits=hits,
+                contexts=contexts,
+            )
             pending_answers.append(
                 GenerateGroundedAnswerRequest(
                     question=question,
                     contexts=tuple(contexts),
                 )
             )
+            pending_citations.append(citation_selection)
             if len(pending_answers) >= command.answer_batch_size:
                 generate_pending_answers()
 
