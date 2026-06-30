@@ -16,6 +16,10 @@ from ai_legal_assistant.application.use_cases.generate_competition_submission im
     GenerateCompetitionSubmissionUseCase,
 )
 from ai_legal_assistant.domain.services.submission_validator import SubmissionValidator
+from ai_legal_assistant.domain.services.submission_citation_selector import (
+    SubmissionCitationSelector,
+    SubmissionCitationSelectorConfig,
+)
 from ai_legal_assistant.infrastructure.bootstrap.retrieval import (
     DenseRetrievalConfig,
     build_dense_retriever,
@@ -73,7 +77,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional partial-results file. Defaults to partial_results.json in --output-dir.",
     )
-    parser.add_argument("--retrieval-top-k", type=int, default=8)
+    parser.add_argument("--retrieval-top-k", type=int, default=4)
     parser.add_argument(
         "--retrieval-mode",
         choices=("auto", "baseline"),
@@ -152,6 +156,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--answer-trust-remote-code", action="store_true")
     parser.add_argument("--max-context-characters", type=int, default=16_000)
     parser.add_argument("--max-characters-per-context", type=int, default=3_000)
+    parser.add_argument("--exact-citation-docs", type=int, default=1)
+    parser.add_argument("--exact-citation-articles", type=int, default=1)
+    parser.add_argument("--simple-citation-docs", type=int, default=2)
+    parser.add_argument("--simple-citation-articles", type=int, default=2)
+    parser.add_argument("--multi-citation-docs", type=int, default=3)
+    parser.add_argument("--multi-citation-articles", type=int, default=5)
+    parser.add_argument(
+        "--citation-min-score",
+        type=float,
+        help="Optional minimum rerank/dense score required before a citation can be submitted.",
+    )
+    parser.add_argument(
+        "--citation-score-margin",
+        type=float,
+        help="Optional maximum distance from the best score for submitted citations.",
+    )
     return parser.parse_args()
 
 
@@ -217,6 +237,18 @@ def main() -> int:
         ),
         validator=SubmissionValidator(),
         artifact_writer=SubmissionArtifactWriter(),
+        citation_selector=SubmissionCitationSelector(
+            SubmissionCitationSelectorConfig(
+                exact_lookup_max_docs=args.exact_citation_docs,
+                exact_lookup_max_articles=args.exact_citation_articles,
+                simple_max_docs=args.simple_citation_docs,
+                simple_max_articles=args.simple_citation_articles,
+                multi_issue_max_docs=args.multi_citation_docs,
+                multi_issue_max_articles=args.multi_citation_articles,
+                min_score=args.citation_min_score,
+                score_margin=args.citation_score_margin,
+            )
+        ),
         checkpoint=JsonSubmissionCheckpoint(
             args.checkpoint_path or args.output_dir / "partial_results.json"
         ),
