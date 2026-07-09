@@ -289,13 +289,14 @@ sequenceDiagram
 Điểm vào: `python scripts/generate_submission.py`.
 
 1. `JsonCompetitionQuestionSource` đọc JSON array, giữ nguyên question text, yêu cầu `id` là integer duy nhất và câu hỏi không rỗng.
-2. Với mỗi question chưa có trong checkpoint, retriever lấy mặc định 8 context. Mode `auto` dùng full hybrid pipeline; mode `baseline` chỉ dense.
+2. Với mỗi question chưa có trong checkpoint, retriever lấy mặc định 4 context. Mode `auto` dùng full hybrid pipeline; mode `baseline` chỉ dense.
 3. `JsonlLegalCitationResolver` load `law_articles.jsonl` một lần, parse `source_note_text` để khôi phục số/tên văn bản và số Điều. Nếu các article cùng một văn bản có source note thiếu trích yếu, resolver dùng trích yếu dài nhất của cùng document đã thấy. LLM không được dùng để bịa citation.
-4. `GroundedLegalAnswerGenerator` render context theo thứ tự retrieval. Mỗi context tối đa 3.000 ký tự và tổng mặc định 16.000 ký tự; heading chứa `Điều ..., <tên văn bản>` khi citation có mặt. System prompt bắt buộc trả lời tiếng Việt chỉ dựa trên context, không bịa số Điều/thời hạn/mức tiền/tên văn bản.
-5. `Qwen/Qwen3-8B` (mặc định) sinh answer batch. Với CUDA, `--answer-load-in-4bit` dùng NF4/bitsandbytes; flag này bị từ chối trên CPU.
-6. Sau mỗi `--checkpoint-every` record mới (mặc định 1), checkpoint được ghi atomically. Lần chạy lại sẽ validate checkpoint và chỉ làm các id chưa có. Checkpoint chỉ bị xoá sau khi full artifact được tạo thành công.
-7. `SubmissionValidator` bảo đảm full coverage source question set, ID không trùng, question text giống nguyên văn, answer không rỗng, citation array không trùng và đúng format pipe-separated.
-8. `SubmissionArtifactWriter` ghi atomic `results.json`, tạo `submission.zip` chứa **duy nhất** `results.json` ở root, và tự kiểm tra cấu trúc ZIP.
+4. `SubmissionCitationSelector` chọn citation cuối để nộp theo quota bảo thủ: exact lookup 1 article, câu một-vấn-đề 2 articles, câu đa-vấn-đề tối đa 5 articles. Answer vẫn nhận toàn bộ context đã retrieve.
+5. `GroundedLegalAnswerGenerator` render context theo thứ tự retrieval. Mỗi context tối đa 3.000 ký tự và tổng mặc định 16.000 ký tự; heading chứa `Điều ..., <tên văn bản>` khi citation có mặt. System prompt bắt buộc trả lời tiếng Việt chỉ dựa trên context, không bịa số Điều/thời hạn/mức tiền/tên văn bản.
+6. `Qwen/Qwen3-8B` (mặc định) sinh answer batch. Với CUDA, `--answer-load-in-4bit` dùng NF4/bitsandbytes; flag này bị từ chối trên CPU.
+7. Sau mỗi `--checkpoint-every` record mới (mặc định 1), checkpoint được ghi atomically. Lần chạy lại sẽ validate checkpoint và chỉ làm các id chưa có. Checkpoint chỉ bị xoá sau khi full artifact được tạo thành công.
+8. `SubmissionValidator` bảo đảm full coverage source question set, ID không trùng, question text giống nguyên văn, answer không rỗng, citation array không trùng và đúng format pipe-separated.
+9. `SubmissionArtifactWriter` ghi atomic `results.json`, tạo `submission.zip` chứa **duy nhất** `results.json` ở root, và tự kiểm tra cấu trúc ZIP.
 
 `results.json` có schema:
 
@@ -579,6 +580,14 @@ python scripts/validate_submission.py `
   data/submissions/private_candidate/results.json `
   --questions "data/raw/R2AIStage1DATA (1).json" `
   --zip data/submissions/private_candidate/submission.zip
+```
+
+Nếu có gold labels local, đo macro Precision/Recall/F2 cho citation trước khi nộp:
+
+```powershell
+python scripts/evaluate_submission.py `
+  data/submissions/private_candidate/results.json `
+  --gold data/eval/submission_gold.json
 ```
 
 ### E. Import snapshot/transfer có sẵn

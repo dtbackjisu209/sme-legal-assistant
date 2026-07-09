@@ -162,6 +162,61 @@ class CompetitionSubmissionTest(unittest.TestCase):
         self.assertEqual(checkpoint.saved_sizes, [4, 5])
         self.assertTrue(checkpoint.cleared)
 
+    def test_pipeline_submits_conservative_citation_subset(self) -> None:
+        class ManyHitRetriever:
+            def execute(self, request):
+                return [
+                    DenseSearchResult(
+                        chunk_id=f"chunk-{index}",
+                        score=1.0 - (index / 10),
+                        text=f"Nội dung Điều {index}.",
+                        metadata={
+                            "article_id": f"article-{index}",
+                            "rerank_score": 1.0 - (index / 10),
+                        },
+                    )
+                    for index in range(1, 5)
+                ]
+
+        class ManyCitationResolver:
+            def resolve(self, hits):
+                return [
+                    ResolvedLegalContext(
+                        text=hit.text,
+                        citation=LegalCitation(
+                            document_code=f"{index:02d}/2020/QH14",
+                            document_title=f"Luật {index:02d}/2020/QH14 thử nghiệm",
+                            article=f"Điều {index}",
+                        ),
+                    )
+                    for index, hit in enumerate(hits, start=1)
+                ]
+
+        questions = [
+            CompetitionQuestion(
+                question_id=1,
+                question="Doanh nghiệp được ưu đãi gì khi tham gia đấu thầu?",
+            )
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            use_case = GenerateCompetitionSubmissionUseCase(
+                question_source=StaticQuestionSource(questions),
+                retriever=ManyHitRetriever(),
+                citation_resolver=ManyCitationResolver(),
+                answer_generator=StaticAnswerGenerator(),
+                validator=SubmissionValidator(),
+                artifact_writer=SubmissionArtifactWriter(),
+            )
+
+            artifact = use_case.execute(
+                GenerateSubmissionCommand(output_dir=Path(directory), retrieval_top_k=4)
+            )
+            records = JsonSubmissionFile.load(artifact.results_path)
+
+        self.assertEqual(len(records[0].relevant_articles), 2)
+        self.assertIn("Điều 1", records[0].relevant_articles[0])
+        self.assertIn("Điều 2", records[0].relevant_articles[1])
+
     def test_validator_rejects_missing_test_question(self) -> None:
         expected = [
             CompetitionQuestion(question_id=1, question="Câu hỏi 1"),

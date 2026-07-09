@@ -7,7 +7,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class GenerateSubmissionCommand:
     output_dir: Path
-    retrieval_top_k: int = 8
+    retrieval_top_k: int = 4
     answer_batch_size: int = 1
     checkpoint_interval: int = 1
 
