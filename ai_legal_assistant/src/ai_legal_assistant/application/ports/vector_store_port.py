@@ -1,17 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Protocol
 
 from ai_legal_assistant.application.dto.retrieval_dto import DenseSearchResult
-
-
-@dataclass(frozen=True)
-class VectorPoint:
-    point_id: str
-    vector: list[float]
-    payload: dict[str, Any]
+from ai_legal_assistant.application.dto.vector_store_dto import VectorPoint
 
 
 class VectorSearchPort(Protocol):
@@ -19,7 +12,7 @@ class VectorSearchPort(Protocol):
         ...
 
 
-class VectorStorePort(VectorSearchPort, Protocol):
+class VectorStoreImportPort(Protocol):
     def ensure_collection(self, vector_size: int, recreate: bool = False) -> None:
         ...
 
@@ -28,3 +21,13 @@ class VectorStorePort(VectorSearchPort, Protocol):
 
     def upsert(self, points: Sequence[VectorPoint]) -> None:
         ...
+
+    def set_indexing_threshold(self, threshold: int) -> None:
+        ...
+
+    def count(self) -> int:
+        ...
+
+
+class VectorStorePort(VectorSearchPort, VectorStoreImportPort, Protocol):
+    ...

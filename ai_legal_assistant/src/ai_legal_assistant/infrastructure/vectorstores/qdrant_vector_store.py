@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from ai_legal_assistant.application.dto.retrieval_dto import DenseSearchResult
-from ai_legal_assistant.application.ports.vector_store_port import VectorPoint
+from ai_legal_assistant.application.dto.vector_store_dto import VectorPoint
 
 
 class QdrantVectorStore:
@@ -35,32 +36,30 @@ class QdrantVectorStore:
         wait: bool = True,
         timeout_seconds: float = 120.0,
     ) -> None:
-        try:
-            from qdrant_client import QdrantClient
-            from qdrant_client.http import models
-        except ImportError as exc:
-            raise RuntimeError("Missing dependency: qdrant-client.") from exc
-
         self.collection_name = collection_name
         self.wait = wait
-        self._models = models
-        self._client = QdrantClient(url=url, api_key=api_key, timeout=timeout_seconds)
+        self._url = url
+        self._api_key = api_key
+        self._timeout_seconds = timeout_seconds
+        self._client: Any | None = None
+        self._models: Any | None = None
 
     def ensure_collection(self, vector_size: int, recreate: bool = False) -> None:
         if vector_size <= 0:
             raise ValueError("vector_size must be positive.")
 
-        exists = self._client.collection_exists(self.collection_name)
+        client, models = self._client_and_models()
+        exists = client.collection_exists(self.collection_name)
         if exists and recreate:
-            self._client.delete_collection(collection_name=self.collection_name)
+            client.delete_collection(collection_name=self.collection_name)
             exists = False
 
         if not exists:
-            self._client.create_collection(
+            client.create_collection(
                 collection_name=self.collection_name,
-                vectors_config=self._models.VectorParams(
+                vectors_config=models.VectorParams(
                     size=vector_size,
-                    distance=self._models.Distance.COSINE,
+                    distance=models.Distance.COSINE,
                 ),
             )
             return
@@ -73,11 +72,12 @@ class QdrantVectorStore:
             )
 
     def create_payload_indexes(self) -> None:
+        _, models = self._client_and_models()
         for field_name in self.KEYWORD_INDEX_FIELDS:
-            self._create_payload_index(field_name, self._models.PayloadSchemaType.KEYWORD)
+            self._create_payload_index(field_name, models.PayloadSchemaType.KEYWORD)
         for field_name in self.INTEGER_INDEX_FIELDS:
-            self._create_payload_index(field_name, self._models.PayloadSchemaType.INTEGER)
-        bool_schema = getattr(self._models.PayloadSchemaType, "BOOL", None)
+            self._create_payload_index(field_name, models.PayloadSchemaType.INTEGER)
+        bool_schema = getattr(models.PayloadSchemaType, "BOOL", None)
         if bool_schema is None:
             return
         for field_name in self.BOOL_INDEX_FIELDS:
@@ -87,10 +87,11 @@ class QdrantVectorStore:
         if not points:
             return
 
-        self._client.upsert(
+        client, models = self._client_and_models()
+        client.upsert(
             collection_name=self.collection_name,
             points=[
-                self._models.PointStruct(
+                models.PointStruct(
                     id=point.point_id,
                     vector=point.vector,
                     payload=point.payload,
@@ -106,7 +107,8 @@ class QdrantVectorStore:
         if top_k <= 0:
             raise ValueError("top_k must be positive.")
 
-        response = self._client.query_points(
+        client, _ = self._client_and_models()
+        response = client.query_points(
             collection_name=self.collection_name,
             query=list(query_vector),
             limit=top_k,
@@ -131,22 +133,25 @@ class QdrantVectorStore:
     def set_indexing_threshold(self, threshold: int) -> None:
         if threshold < 0:
             raise ValueError("indexing threshold cannot be negative.")
-        self._client.update_collection(
+        client, models = self._client_and_models()
+        client.update_collection(
             collection_name=self.collection_name,
-            optimizer_config=self._models.OptimizersConfigDiff(indexing_threshold=threshold),
+            optimizer_config=models.OptimizersConfigDiff(indexing_threshold=threshold),
         )
 
     def count(self) -> int:
+        client, _ = self._client_and_models()
         return int(
-            self._client.count(
+            client.count(
                 collection_name=self.collection_name,
                 exact=True,
             ).count
         )
 
     def _create_payload_index(self, field_name: str, schema: object) -> None:
+        client, _ = self._client_and_models()
         try:
-            self._client.create_payload_index(
+            client.create_payload_index(
                 collection_name=self.collection_name,
                 field_name=field_name,
                 field_schema=schema,
@@ -159,9 +164,26 @@ class QdrantVectorStore:
             raise
 
     def _get_existing_vector_size(self) -> int | None:
-        collection = self._client.get_collection(collection_name=self.collection_name)
+        client, _ = self._client_and_models()
+        collection = client.get_collection(collection_name=self.collection_name)
         vectors_config = collection.config.params.vectors
         if isinstance(vectors_config, dict):
             first_vector = next(iter(vectors_config.values()), None)
             return getattr(first_vector, "size", None)
         return getattr(vectors_config, "size", None)
+
+    def _client_and_models(self) -> tuple[Any, Any]:
+        if self._client is None or self._models is None:
+            try:
+                from qdrant_client import QdrantClient
+                from qdrant_client.http import models
+            except ImportError as exc:
+                raise RuntimeError("Missing dependency: qdrant-client.") from exc
+
+            self._models = models
+            self._client = QdrantClient(
+                url=self._url,
+                api_key=self._api_key,
+                timeout=self._timeout_seconds,
+            )
+        return self._client, self._models
