@@ -1,62 +1,62 @@
 # SME Legal Assistant
 
-Hệ thống RAG (Retrieval-Augmented Generation) phục vụ truy xuất và trả lời câu hỏi pháp lý Việt Nam. Dự án chuẩn bị corpus từ **Pháp điển**, tìm căn cứ bằng hybrid retrieval (dense vector + BM25), có thể mở rộng truy vấn một cách kiểm soát, rerank kết quả, rồi sinh câu trả lời chỉ dựa trên các căn cứ đã lấy được. Ngoài chế độ truy vấn tương tác, hệ thống còn có pipeline tạo `results.json` và `submission.zip` cho bài thi Legal QA.
+A RAG (Retrieval-Augmented Generation) system for retrieving and answering Vietnamese legal questions. The project prepares a corpus from the **Pháp điển** (Vietnam Legal Code), finds legal grounds using hybrid retrieval (dense vector + BM25), can perform controlled query expansion, reranks results, then generates answers based only on the retrieved grounds. In addition to the interactive query mode, the system also has a pipeline for generating `results.json` and `submission.zip` for the Legal QA competition.
 
-> Lưu ý pháp lý: đây là hệ thống hỗ trợ tìm và tổng hợp thông tin, không thay thế tư vấn pháp lý của luật sư hoặc cơ quan có thẩm quyền. Chất lượng câu trả lời phụ thuộc trực tiếp vào corpus, chỉ mục, mô hình và các kết quả truy xuất thực tế.
+> Legal notice: this is a system that assists in searching and synthesizing information; it does not replace legal advice from a lawyer or a competent authority. Answer quality depends directly on the corpus, the index, the model, and the actual retrieval results.
 
-## Mục lục
+## Table of Contents
 
-- [Phạm vi và trạng thái](#phạm-vi-và-trạng-thái)
-- [Kiến trúc](#kiến-trúc)
-- [Luồng dữ liệu end-to-end](#luồng-dữ-liệu-end-to-end)
-- [Luồng truy vấn và xếp hạng](#luồng-truy-vấn-và-xếp-hạng)
-- [Luồng tạo bài nộp](#luồng-tạo-bài-nộp)
-- [Cấu trúc thư mục](#cấu-trúc-thư-mục)
-- [Cài đặt và cấu hình](#cài-đặt-và-cấu-hình)
-- [Vận hành các pipeline](#vận-hành-các-pipeline)
-- [Dữ liệu, schema và artifact](#dữ-liệu-schema-và-artifact)
-- [Đánh giá chất lượng retrieval](#đánh-giá-chất-lượng-retrieval)
-- [An toàn, tính đúng đắn và giới hạn](#an-toàn-tính-đúng-đắn-và-giới-hạn)
-- [Kiểm thử và xử lý sự cố](#kiểm-thử-và-xử-lý-sự-cố)
+- [Scope and Status](#scope-and-status)
+- [Architecture](#architecture)
+- [End-to-end Data Flow](#end-to-end-data-flow)
+- [Query and Ranking Flow](#query-and-ranking-flow)
+- [Submission Generation Flow](#submission-generation-flow)
+- [Directory Structure](#directory-structure)
+- [Installation and Configuration](#installation-and-configuration)
+- [Operating the Pipelines](#operating-the-pipelines)
+- [Data, Schema and Artifacts](#data-schema-and-artifacts)
+- [Retrieval Quality Evaluation](#retrieval-quality-evaluation)
+- [Safety, Correctness and Limitations](#safety-correctness-and-limitations)
+- [Testing and Troubleshooting](#testing-and-troubleshooting)
 
-## Phạm vi và trạng thái
+## Scope and Status
 
-Repository này là một **pipeline Python chạy bằng CLI**. Điểm vào chính nằm trong `ai_legal_assistant/scripts/`; phần logic lõi dùng kiến trúc phân lớp domain/application/infrastructure.
+This repository is a **CLI-driven Python pipeline**. The main entry points are located in `ai_legal_assistant/scripts/`; the core logic uses a domain/application/infrastructure layered architecture.
 
-Hiện tại có các khả năng sau:
+Currently, the system supports the following capabilities:
 
-- Nạp articles từ Hugging Face dataset `tmquan/phapdien-moj-gov-vn` và chunk theo cấu trúc Điều/Khoản/Điểm.
-- Tạo embedding bằng `Qwen/Qwen3-Embedding-0.6B`, lưu shard Parquet và import vào Qdrant.
-- Tạo và truy vấn BM25 tiếng Việt, có tokenize chuyên biệt cho thuật ngữ pháp lý và sửa mojibake.
-- Truy vấn dense baseline hoặc retrieval tự động: phân tích query, query expansion có guardrail, dense + BM25 + Weighted RRF + cross-encoder reranking.
-- Đánh giá Recall@K và MRR@K trên test set JSONL.
-- Sinh câu trả lời pháp lý grounded, trích citation từ corpus thay vì để LLM tự bịa citation, checkpoint tiến trình và đóng gói bài nộp.
+- Loading articles from the Hugging Face dataset `tmquan/phapdien-moj-gov-vn` and chunking them according to the Điều/Khoản/Điểm (Article/Clause/Point) structure.
+- Generating embeddings using `Qwen/Qwen3-Embedding-0.6B`, saving Parquet shards, and importing them into Qdrant.
+- Building and querying a Vietnamese BM25 index, with specialized tokenization for legal terminology and mojibake correction.
+- Dense baseline querying or automatic retrieval: query analysis, guardrailed query expansion, dense + BM25 + Weighted RRF + cross-encoder reranking.
+- Evaluating Recall@K and MRR@K on a JSONL test set.
+- Generating grounded legal answers, extracting citations from the corpus rather than letting the LLM fabricate citations, checkpointing progress, and packaging the submission.
 
-Chưa có trong source hiện tại:
+Not yet present in the current source:
 
-- Không có `FastAPI` application, route HTTP, giao diện web, Docker Compose hay xác thực người dùng, dù `fastapi` và `uvicorn` có trong `requirements.txt`.
-- Không có script Python độc lập để embed toàn bộ corpus; quy trình embedding được lưu trong notebook Colab `notebooks/colab/Embed_qwen3_06_3b_latest.ipynb`.
-- Không có cơ chế tự động nạp `.env` (`python-dotenv` không được dùng). File `.env` chỉ có tác dụng nếu shell/runner của bạn tự nạp nó.
+- No `FastAPI` application, HTTP routes, web interface, Docker Compose, or user authentication, even though `fastapi` and `uvicorn` are listed in `requirements.txt`.
+- No standalone Python script to embed the entire corpus; the embedding process is stored in the Colab notebook `notebooks/colab/Embed_qwen3_06_3b_latest.ipynb`.
+- No automatic `.env` loading mechanism (`python-dotenv` is not used). The `.env` file only takes effect if your shell/runner loads it itself.
 
-## Kiến trúc
+## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Offline[Chuẩn bị corpus / offline]
-        HF[Hugging Face\nPháp điển articles] --> ING[Ingest + làm sạch]
+    subgraph Offline[Corpus Preparation / Offline]
+        HF[Hugging Face\nPháp điển articles] --> ING[Ingest + cleaning]
         ING --> ART[law_articles.jsonl]
         ING --> CHK[law_chunks.jsonl]
-        CHK --> EMB[Notebook embedding\nQwen3-Embedding-0.6B]
+        CHK --> EMB[Embedding notebook\nQwen3-Embedding-0.6B]
         EMB --> PQ[embedded_*.parquet]
-        PQ --> IMP[Import Qdrant]
+        PQ --> IMP[Import to Qdrant]
         IMP --> QD[(Qdrant\nHNSW + payload)]
         CHK --> BM[Build BM25]
         BM --> BI[(bm25_index.pkl)]
     end
 
-    subgraph Online[Truy vấn / inference]
-        U[Query tiếng Việt] --> NORM[Chuẩn hoá]
-        NORM --> PLAN[Qwen3 query planner\nJSON có ràng buộc]
+    subgraph Online[Query / Inference]
+        U[Vietnamese Query] --> NORM[Normalization]
+        NORM --> PLAN[Qwen3 query planner\nconstrained JSON]
         PLAN --> DENSE[Qwen3 query embedding]
         PLAN --> SPARSE[BM25 search]
         DENSE --> QD
@@ -67,204 +67,204 @@ flowchart TB
         SEL --> HITS[Legal context + metadata]
     end
 
-    subgraph Submission[Tạo bài nộp]
-        HITS --> CITE[Khôi phục citation\ntừ law_articles.jsonl]
+    subgraph Submission[Submission Generation]
+        HITS --> CITE[Restore citation\nfrom law_articles.jsonl]
         CITE --> ANSWER[Qwen3 answer model\ngrounded generation]
         ANSWER --> VALID[Schema + coverage validator]
         VALID --> OUT[results.json + submission.zip]
     end
 ```
 
-### Phân lớp mã nguồn
+### Source Code Layers
 
-| Lớp | Vai trò | Ví dụ chính |
+| Layer | Role | Main Examples |
 |---|---|---|
-| `domain` | Entity và quy tắc nghiệp vụ thuần Python | `LawArticle`, `LawChunk`, `QueryPlan`, chunking, BM25, RRF, selector, validator |
-| `application` | Use case và port/protocol để tách logic khỏi công nghệ | ingest, retrieval, query planning, evaluate, generate submission |
-| `infrastructure` | Adapter cụ thể cho Hugging Face, Qdrant, SentenceTransformers, Ollama, JSONL, pickle, LLM | `QdrantVectorStore`, `HuggingFaceCausalLLM`, `BM25Search` |
-| `scripts` | CLI composition root; ghép config, adapter và use case | `query_qdrant.py`, `generate_submission.py` |
-| `tests/unit` | Unit test với fake adapter, không cần tải model | query planning, retrieval, BM25, evaluation, submission |
+| `domain` | Entities and pure-Python business rules | `LawArticle`, `LawChunk`, `QueryPlan`, chunking, BM25, RRF, selector, validator |
+| `application` | Use cases and ports/protocols to decouple logic from technology | ingest, retrieval, query planning, evaluate, generate submission |
+| `infrastructure` | Concrete adapters for Hugging Face, Qdrant, SentenceTransformers, Ollama, JSONL, pickle, LLM | `QdrantVectorStore`, `HuggingFaceCausalLLM`, `BM25Search` |
+| `scripts` | CLI composition root; wires up config, adapters, and use cases | `query_qdrant.py`, `generate_submission.py` |
+| `tests/unit` | Unit tests with fake adapters, no model loading required | query planning, retrieval, BM25, evaluation, submission |
 
-Dependency hướng vào trong: domain không biết Qdrant hay Hugging Face; application phụ thuộc vào các `Protocol`/port; infrastructure hiện thực port. Vì vậy có thể thay Qdrant, embedding provider hoặc LLM mà ít ảnh hưởng use case.
+Dependencies point inward: the domain doesn't know about Qdrant or Hugging Face; the application depends on `Protocol`/port abstractions; the infrastructure implements the ports. This makes it possible to swap out Qdrant, the embedding provider, or the LLM with minimal impact on the use cases.
 
-## Luồng dữ liệu end-to-end
+## End-to-end Data Flow
 
-### 1. Ingest corpus Pháp điển
+### 1. Ingest the Pháp điển Corpus
 
-Điểm vào: `python scripts/ingest_phapdien.py`.
+Entry point: `python scripts/ingest_phapdien.py`.
 
-`HuggingFacePhapdienLoader` đọc split `train` của config `articles` từ dataset `tmquan/phapdien-moj-gov-vn`. Mỗi row được:
+`HuggingFacePhapdienLoader` reads the `train` split of the `articles` config from the `tmquan/phapdien-moj-gov-vn` dataset. Each row is:
 
-1. Chuẩn hoá Unicode về NFC; bỏ BOM/NBSP; thống nhất xuống dòng và khoảng trắng.
-2. Ép an toàn các trường số (`subject_number`, `topic_number`) và `source_links`.
-3. Tạo `article_id` ổn định: SHA-1 rút gọn 20 ký tự từ `subject_id`, `topic_id`, `article_anchor`, `article_title`, `source_url`.
-4. Bỏ article không có `content_text` sau làm sạch.
-5. Ghi đồng thời article gốc và các chunk ra JSONL UTF-8.
+1. Normalized to Unicode NFC; BOM/NBSP removed; line breaks and whitespace unified.
+2. Numeric fields (`subject_number`, `topic_number`) and `source_links` are safely coerced.
+3. A stable `article_id` is generated: a 20-character truncated SHA-1 hash derived from `subject_id`, `topic_id`, `article_anchor`, `article_title`, `source_url`.
+4. Articles with no `content_text` after cleaning are dropped.
+5. Both the original article and its chunks are written simultaneously to UTF-8 JSONL files.
 
-`JsonlLawRepository` mở file ở chế độ ghi mới (`"w"`), vì thế chạy ingest lại sẽ **ghi đè** `data/processed/law_articles.jsonl` và `data/processed/law_chunks.jsonl`. Chỉ chạy khi chủ động tái tạo corpus.
+`JsonlLawRepository` opens the file in write mode (`"w"`), so re-running ingest will **overwrite** `data/processed/law_articles.jsonl` and `data/processed/law_chunks.jsonl`. Only run it when you intentionally want to rebuild the corpus.
 
-### 2. Chunking pháp lý
+### 2. Legal Chunking
 
-`LegalChunkingPolicy` giữ được ranh giới pháp lý càng nhiều càng tốt:
+`LegalChunkingPolicy` preserves legal boundaries as much as possible:
 
-- Tách Khoản bằng marker đầu dòng dạng `1. `, `2. `, ...
-- Bên trong Khoản tách Điểm bằng marker `a)`, `b)`, ... khi xuất hiện ở đầu câu/đầu dòng hoặc sau xuống dòng, `;`, `:`.
-- Đoạn không nhận diện được Khoản được coi là segment cấp Article.
-- Một segment không quá 1.800 ký tự trở thành một chunk.
-- Segment dài hơn được tách tại ranh giới ưu tiên: đoạn trống, xuống dòng, `. `, `; `, `: `, `, `, rồi khoảng trắng.
-- Chunk con dài tối đa 1.800 ký tự, overlap 250 ký tự; tail ngắn dưới 300 ký tự được gộp với phần trước.
+- Splits Khoản (clauses) using line-start markers such as `1. `, `2. `, ...
+- Within a Khoản, splits Điểm (points) using markers like `a)`, `b)`, ... when they appear at the start of a sentence/line or after a line break, `;`, or `:`.
+- Text where no Khoản can be identified is treated as an Article-level segment.
+- A segment no longer than 1,800 characters becomes a single chunk.
+- Longer segments are split at priority boundaries: blank line, line break, `. `, `; `, `: `, `, `, then whitespace.
+- Sub-chunks are at most 1,800 characters long, with 250-character overlap; tails shorter than 300 characters are merged with the preceding part.
 
-Mỗi `LawChunk` mang cả metadata ngữ cảnh như `article_id`, chủ đề, đề mục, chương, tên Điều, Khoản, Điểm, URL nguồn, vị trí ký tự, `ordinal`, `parent_chunk_id` và thông tin subchunk. `chunk_id` cũng là hash ổn định, nhưng **không được coi là identity duy nhất của nội dung toàn hệ thống**, vì corpus hiện có legacy chunk ID trùng nhau.
+Each `LawChunk` carries contextual metadata such as `article_id`, subject, topic, chapter, article title, clause, point, source URL, character position, `ordinal`, `parent_chunk_id`, and sub-chunk information. `chunk_id` is also a stable hash, but **it is not considered a system-wide unique content identity**, since the current corpus has colliding legacy chunk IDs.
 
-### 3. Tạo embedding và shard Parquet
+### 3. Embedding Generation and Parquet Sharding
 
-Notebook `notebooks/colab/Embed_qwen3_06_3b_latest.ipynb` là quy trình đã dùng để tạo corpus vector:
+The `notebooks/colab/Embed_qwen3_06_3b_latest.ipynb` notebook is the process used to generate the vector corpus:
 
 - Model: `Qwen/Qwen3-Embedding-0.6B`.
 - `max_seq_length=768`.
-- Vector `float32`, L2-normalized, 1.024 chiều.
-- Mỗi shard chứa 5.000 row (shard cuối có thể ít hơn).
-- Mỗi record Parquet gồm `point_id`, `vector` và toàn bộ payload metadata/chunk text.
+- Vectors are `float32`, L2-normalized, 1,024 dimensions.
+- Each shard contains 5,000 rows (the last shard may contain fewer).
+- Each Parquet record includes `point_id`, `vector`, and the full metadata/chunk text payload.
 
-Văn bản đưa vào embedding gồm metadata có nhãn (Chủ đề, Đề mục, Chương, Điều, Khoản, Điểm, Nguồn) rồi đến `Nội dung`. Điều này khác với chỉ embed raw `text`: semantic search có thêm tín hiệu cấu trúc pháp lý. Khi tái tạo vector, cần dùng cùng cách build text, model, max length, normalize và payload schema; thay đổi một trong các phần này làm vector không còn tương đương với collection cũ.
+The text fed into embedding includes labeled metadata (Subject, Topic, Chapter, Article, Clause, Point, Source) followed by `Content`. This differs from embedding only the raw `text`: semantic search gets extra legal structural signal. When regenerating vectors, you must use the same text-building method, model, max length, normalization, and payload schema; changing any of these makes the vectors no longer equivalent to the old collection.
 
-Notebook dùng UUIDv5 từ legacy `chunk_id`. Khi import, script lại sinh point ID từ toàn payload canonical và lưu ID notebook trong `legacy_point_id`. Cách này ngăn row khác nội dung bị ghi đè chỉ vì trùng legacy ID.
+The notebook uses UUIDv5 derived from the legacy `chunk_id`. During import, the script regenerates the point ID from the full canonical payload and stores the notebook's ID in `legacy_point_id`. This prevents rows with different content from overwriting each other just because of a colliding legacy ID.
 
-### 4. Import Qdrant
+### 4. Import into Qdrant
 
-`scripts/import_parquet_to_qdrant.py` thực hiện các bước:
+`scripts/import_parquet_to_qdrant.py` performs the following steps:
 
-1. Sắp xếp `embedded_*.parquet`, kiểm tra không thiếu số shard và có cả hai cột bắt buộc `point_id`, `vector`.
-2. Kiểm tra mọi vector có đúng 1.024 chiều.
-3. Tạo/kiểm tra collection Qdrant dùng cosine distance. `--recreate` xoá collection cũ trước khi tạo lại.
-4. Tạm đặt `indexing_threshold=0` để bulk upsert không xây HNSW liên tục.
-5. Upsert theo batch (mặc định 512); lỗi batch retry exponential backoff tối đa 5 lần.
-6. Tạo payload index cho các trường keyword/integer/boolean, rồi bật lại HNSW với threshold 10.000.
+1. Sorts `embedded_*.parquet` files, checks that no shard numbers are missing, and verifies both required columns `point_id` and `vector` are present.
+2. Checks that every vector has exactly 1,024 dimensions.
+3. Creates/checks the Qdrant collection using cosine distance. `--recreate` deletes the old collection before recreating it.
+4. Temporarily sets `indexing_threshold=0` so bulk upserts don't continuously rebuild HNSW.
+5. Upserts in batches (default 512); failed batches retry with exponential backoff up to 5 times.
+6. Creates payload indexes for keyword/integer/boolean fields, then re-enables HNSW with a threshold of 10,000.
 
-Các field được tạo payload index gồm `chunk_id`, `article_id`, `subject_id`, `topic_id`, Khoản/Điểm/loại chunk/parent; các ordinal/number; và cờ subchunk. Retrieval hiện không filter bằng các index này, nhưng chúng hỗ trợ audit, filter và phát triển API sau này.
+Fields that get payload indexes include `chunk_id`, `article_id`, `subject_id`, `topic_id`, clause/point/chunk type/parent; ordinals/numbers; and sub-chunk flags. Retrieval currently doesn't filter using these indexes, but they support audit, filtering, and future API development.
 
-### 5. Build chỉ mục BM25
+### 5. Build the BM25 Index
 
-`scripts/build_bm25_index.py` đọc **chính** `law_chunks.jsonl`, token hoá tiếng Việt và ghi `data/indexes/bm25_index.pkl`.
+`scripts/build_bm25_index.py` reads **directly** from `law_chunks.jsonl`, tokenizes the Vietnamese text, and writes `data/indexes/bm25_index.pkl`.
 
-Tokenizer thử theo thứ tự `underthesea` → `pyvi` → regex (hoặc ép bằng `--tokenizer`). Nó:
+The tokenizer tries, in order, `underthesea` → `pyvi` → regex (or can be forced via `--tokenizer`). It:
 
-- Chuẩn hoá Unicode/khoảng trắng, lowercase và có thể sửa mojibake.
-- Giữ token tiếng Việt/số.
-- Thêm token phrase cho các cụm pháp lý (ví dụ `vốn điều lệ`, `mã số thuế`, `hợp đồng lao động`) với `phrase_boost` mặc định 1.
-- Lưu config tokenizer ngay cạnh BM25 index, để query dùng đúng tokenizer đã dùng lúc build.
+- Normalizes Unicode/whitespace, lowercases, and can fix mojibake.
+- Keeps Vietnamese/numeric tokens.
+- Adds phrase tokens for legal phrases (e.g. `vốn điều lệ`, `mã số thuế`, `hợp đồng lao động`) with a default `phrase_boost` of 1.
+- Stores the tokenizer config alongside the BM25 index, so queries use the same tokenizer used at build time.
 
-BM25 mặc định `k1=1.5`, `b=0.75`; index lưu inverted postings, IDF, document length, text và metadata. Vì index chứa text/metadata, nó phải được rebuild mỗi khi `law_chunks.jsonl` thay đổi.
+BM25 defaults to `k1=1.5`, `b=0.75`; the index stores inverted postings, IDF, document length, text, and metadata. Because the index contains text/metadata, it must be rebuilt every time `law_chunks.jsonl` changes.
 
-### 6. Audit đồng bộ corpus
+### 6. Corpus Sync Audit
 
-`scripts/audit_qdrant_corpus.py` so sánh `chunk_id` ở JSONL với payload `chunk_id` trong Qdrant và xuất:
+`scripts/audit_qdrant_corpus.py` compares `chunk_id`s in the JSONL file against the `chunk_id` payload in Qdrant and exports:
 
-- `missing_in_qdrant.jsonl`: row local chưa thấy trong collection.
-- `extra_in_qdrant.jsonl`: chunk ID chỉ có ở collection.
-- `duplicate_chunk_ids_in_qdrant.jsonl`: legacy ID có nhiều point.
-- `summary.json`: số liệu tổng hợp.
+- `missing_in_qdrant.jsonl`: local rows not found in the collection.
+- `extra_in_qdrant.jsonl`: chunk IDs found only in the collection.
+- `duplicate_chunk_ids_in_qdrant.jsonl`: legacy IDs with multiple points.
+- `summary.json`: aggregate statistics.
 
-Audit theo legacy `chunk_id`, nên hữu ích để kiểm tra coverage nhưng không thay thế content-level dedup ở runtime. Báo cáo có sẵn trong repository là artifact tại thời điểm audit; hãy chạy lại sau mỗi lần rebuild/import.
+The audit is based on legacy `chunk_id`, so it's useful for checking coverage but does not replace content-level dedup at runtime. Any report already in the repository is a snapshot artifact at the time of the audit; re-run it after every rebuild/import.
 
-## Luồng truy vấn và xếp hạng
+## Query and Ranking Flow
 
-Có hai mode khác nhau, cần phân biệt rõ:
+There are two distinct modes that need to be clearly distinguished:
 
-| Mode | Điểm vào | Thành phần chạy | Mục đích |
+| Mode | Entry Point | Components Run | Purpose |
 |---|---|---|---|
-| `baseline` | `--retrieval-mode baseline` hoặc evaluation không có `--expand-query` | strip query → embedding → Qdrant | Baseline dense công bằng, nhanh hơn |
-| `auto` | mặc định của `query_qdrant.py` và `generate_submission.py` | normalize → LLM planning → dense + BM25 → RRF → rerank → scope-aware selection | Chất lượng retrieval production/interactive |
+| `baseline` | `--retrieval-mode baseline` or evaluation without `--expand-query` | strip query → embedding → Qdrant | Fair, faster dense baseline |
+| `auto` | default for `query_qdrant.py` and `generate_submission.py` | normalize → LLM planning → dense + BM25 → RRF → rerank → scope-aware selection | Production/interactive retrieval quality |
 
-### Baseline dense retrieval
+### Baseline Dense Retrieval
 
-1. `LegalQuery` trim query và từ chối query rỗng.
-2. `Qwen3QueryEmbedder` format query:
+1. `LegalQuery` trims the query and rejects empty queries.
+2. `Qwen3QueryEmbedder` formats the query:
 
    ```text
    Instruct: Given a Vietnamese legal question, retrieve relevant Vietnamese legal passages that answer the question
-   Query:<câu hỏi>
+   Query:<the question>
    ```
 
-3. SentenceTransformers tạo vector normalized 1.024 chiều.
-4. Use case kiểm tra vector dimension trước khi gọi Qdrant.
-5. Qdrant `query_points` cosine trả về top-K payload/text.
+3. SentenceTransformers produces a normalized 1,024-dimensional vector.
+4. The use case checks the vector dimension before calling Qdrant.
+5. Qdrant `query_points` cosine search returns the top-K payload/text.
 
-Mode này không chuẩn hoá viết tắt, không query expansion, không BM25, không reranker.
+This mode does not normalize abbreviations, does not perform query expansion, does not use BM25, and does not use the reranker.
 
-### Auto retrieval: kế hoạch query an toàn
+### Auto Retrieval: Safe Query Planning
 
 ```mermaid
 flowchart LR
-    Q[Raw query] --> N[Unicode/whitespace/viết tắt\nnormalization]
+    Q[Raw query] --> N[Unicode/whitespace/abbreviation\nnormalization]
     N --> A[LLM analysis JSON]
-    A --> V{Hợp lệ và có evidence?}
-    V -- Không --> O[Original-only plan + warning]
+    A --> V{Valid and has evidence?}
+    V -- No --> O[Original-only plan + warning]
     V -- exact lookup --> E[Original-only exact plan]
-    V -- Các loại khác --> X[LLM expansion JSON]
+    V -- Other types --> X[LLM expansion JSON]
     X --> G{Guardrail policy}
-    G -- Không đạt sau 1 repair --> O
-    G -- Đạt --> P[QueryPlan]
+    G -- Fails after 1 repair --> O
+    G -- Passes --> P[QueryPlan]
     E --> P
     O --> P
     P --> R[Hybrid retrieval]
 ```
 
-`VietnameseLegalQueryNormalizer` chuẩn hoá NFC/khoảng trắng, mở rộng `TNHH`, `BHXH`, `GTGT`, chuẩn hoá định dạng `Điều`, `Khoản`, `Điểm` và số hiệu văn bản dạng `123/2020/NĐ-CP`. Nó không được phép làm mất phủ định.
+`VietnameseLegalQueryNormalizer` normalizes NFC/whitespace, expands `TNHH`, `BHXH`, `GTGT`, standardizes the format of `Điều`, `Khoản`, `Điểm`, and legal document numbers such as `123/2020/NĐ-CP`. It must not remove negation words.
 
-`LLMLegalQueryPlanner` dùng `Qwen/Qwen3-0.6B` riêng với embedding model. LLM không trả lời câu hỏi pháp luật; nó chỉ tạo JSON có schema bị ràng buộc bằng `lm-format-enforcer`.
+`LLMLegalQueryPlanner` uses a separate `Qwen/Qwen3-0.6B` model, distinct from the embedding model. The LLM does not answer legal questions; it only generates JSON constrained by a schema enforced with `lm-format-enforcer`.
 
-Pha analysis trích:
+The analysis phase extracts:
 
 - `intent`: `deadline`, `penalty`, `procedure`, `definition`, `obligation`, `eligibility`, `unknown`.
 - `query_type`: `exact_lookup`, `legal_concept`, `legal_situation`, `multi_issue`, `ambiguous`.
-- domain, entity/must term, loại hình doanh nghiệp, số Điều/Khoản/văn bản, temporal scope.
-- evidence quote cho từng entity/constraint. Quote phải xuất hiện nguyên nghĩa trong query đã chuẩn hoá.
+- Domain, entity/must-have terms, business entity type, Article/Clause/document numbers, temporal scope.
+- Evidence quotes for each entity/constraint. The quote must appear verbatim in the normalized query.
 
-Pha expansion chỉ chạy nếu không phải `exact_lookup`, tạo semantic variant, scope variant/subquery và lexical term. Chính sách selection áp các điều kiện sau:
+The expansion phase only runs if the query is not `exact_lookup`, generating semantic variants, scope variants/subqueries, and lexical terms. The selection policy enforces the following conditions:
 
-- Original query luôn đứng đầu với weight `1.0`.
-- Tối đa ba semantic/scope variant và tối đa hai subquery.
-- `exact_lookup` luôn bỏ expansion, kể cả LLM có sinh ra.
-- Variant semantic có weight `0.8`; scope variant `0.7`; subquery `0.75`.
-- Không thêm số Điều/Khoản, con số, số tiền, thời hạn hoặc đơn vị thời gian không có trong query.
-- Không được làm mất `không`, `chưa`, `không phải`, `không được`.
-- Không đổi loại hình doanh nghiệp đã nêu rõ.
-- Term BM25 phải grounded trong query gốc hoặc variant đã được nhận.
-- Ambiguous query cần ít nhất hai scope variant an toàn; multi-issue cần subquery an toàn. Nếu không đạt, hệ thống fail closed về original-only plan.
-- JSON hoặc analysis sai được cho một lần repair. Nếu vẫn sai, batch không chết: `QueryPlan.warnings` ghi lý do và retrieval tiếp tục với query gốc.
+- The original query always ranks first with weight `1.0`.
+- At most three semantic/scope variants and at most two subqueries.
+- `exact_lookup` always skips expansion, even if the LLM generates one.
+- Semantic variants have weight `0.8`; scope variants `0.7`; subqueries `0.75`.
+- No adding of Article/Clause numbers, figures, monetary amounts, deadlines, or time units not present in the query.
+- Must not remove `không`, `chưa`, `không phải`, `không được` (negation words).
+- Must not change an explicitly stated business entity type.
+- BM25 terms must be grounded in the original query or an accepted variant.
+- Ambiguous queries need at least two safe scope variants; multi-issue queries need safe subqueries. If not met, the system fails closed to the original-only plan.
+- Incorrect JSON or analysis is given one repair attempt. If it's still wrong, the batch doesn't fail: `QueryPlan.warnings` records the reason and retrieval continues with the original query.
 
-`plan_legal_query.py` xuất toàn bộ `QueryPlan` để quan sát analysis, evidence, variant, weight và warning trước khi chạy retrieval hàng loạt.
+`plan_legal_query.py` exports the full `QueryPlan` to allow observation of the analysis, evidence, variants, weights, and warnings before running batch retrieval.
 
-### Hybrid retrieval, dedup và rerank
+### Hybrid Retrieval, Dedup, and Reranking
 
-Với từng query trong `semantic_queries + subqueries`, hệ thống làm như sau:
+For each query in `semantic_queries + subqueries`, the system does the following:
 
-1. Dense search: embed query bằng pipeline tương thích corpus rồi lấy `per_query_top_k × oversample_factor` hit. Mặc định là `20 × 5 = 100` hit thô.
-2. Sparse search: query BM25 với query text cộng lexical term hợp lệ chưa có trong text; cũng lấy 100 hit thô nếu BM25 bật.
-3. Dedup từng ranked list theo `content_id = SHA-256(v2 | article_id | normalized text)` rút gọn. Hệ thống vẫn gom các legacy `chunk_id` vào metadata để trace được nguồn. Điều này xử lý cả legacy chunk ID va chạm và point trùng nội dung.
-4. Giữ tối đa `per_query_top_k` content duy nhất cho mỗi modality.
-5. Fuse dense và BM25 trong từng query bằng Weighted Reciprocal Rank Fusion:
+1. Dense search: embed the query using a pipeline compatible with the corpus, then retrieve `per_query_top_k × oversample_factor` raw hits. The default is `20 × 5 = 100` raw hits.
+2. Sparse search: query BM25 with the query text plus valid lexical terms not already in the text; also retrieves up to 100 raw hits if BM25 is enabled.
+3. Dedup each ranked list by `content_id = SHA-256(v2 | article_id | normalized text)` truncated. The system still collects the legacy `chunk_id`s into metadata for traceability. This handles both legacy chunk ID collisions and points with duplicate content.
+4. Keeps at most `per_query_top_k` unique content items for each modality.
+5. Fuses dense and BM25 within each query using Weighted Reciprocal Rank Fusion:
 
    ```text
    RRF(content) = Σ weight_list / (60 + rank)
    ```
 
-   Dense có weight `1.0`, BM25 mặc định `0.7`.
-6. Fuse tiếp các local ranking giữa original/variant/subquery bằng weight của từng query.
-7. Lấy `candidate_pool_size` mặc định 50 candidate tốt nhất, đồng thời reserve thêm tối đa 5 candidate đầu cho mỗi scope branch để scope không bị global ranking nuốt mất.
-8. Nếu bật reranker, `BAAI/bge-reranker-v2-m3` chấm query–document pair. Query context có câu hỏi chuẩn hoá, intent và scope; document context có tên Điều, scope và text. Nếu tắt reranker, RRF score là final score.
-9. `RetrievalCandidateSelector` sort theo `(rerank_score, rrf_score)`, dedup content, áp giới hạn chunk trên mỗi article.
+   Dense has weight `1.0`, BM25 defaults to `0.7`.
+6. Further fuses local rankings across original/variant/subquery using each query's weight.
+7. Takes the top `candidate_pool_size` candidates, default 50, while also reserving up to 5 top candidates for each scope branch so scope isn't swallowed by global ranking.
+8. If the reranker is enabled, `BAAI/bge-reranker-v2-m3` scores query–document pairs. The query context includes the normalized question, intent, and scope; the document context includes the article title, scope, and text. If the reranker is disabled, the RRF score is the final score.
+9. `RetrievalCandidateSelector` sorts by `(rerank_score, rrf_score)`, dedups content, and enforces a limit on chunks per article.
 
-Với ambiguous query, selector cố giữ một candidate cho mỗi scope bắt buộc, giới hạn một chunk/article mặc định, và khi có reranker chỉ giữ candidate bổ sung không thấp hơn scope winner yếu nhất quá `scope_relevance_margin=0.15`. Vì vậy hệ thống **có thể trả ít hơn `top_k`**; đây là hành vi chủ động để tránh lấp context bằng căn cứ yếu.
+For ambiguous queries, the selector tries to keep one candidate per required scope, limits to one chunk/article by default, and when a reranker is present, only keeps additional candidates that aren't lower than the weakest scope winner by more than `scope_relevance_margin=0.15`. As a result, the system **may return fewer than `top_k`** results; this is intentional behavior to avoid filling the context with weak grounds.
 
-Kết quả CLI `auto` có:
+The `auto` CLI results include:
 
-- `query_plan`: original/normalized query, analysis, variant, lexical term và warnings.
-- `hits`: `chunk_id`, text, final score, metadata corpus.
-- Metadata bổ sung: `content_id`, `legacy_chunk_ids`, `matched_scopes`, `rrf_score`, `rerank_score`.
+- `query_plan`: original/normalized query, analysis, variants, lexical terms, and warnings.
+- `hits`: `chunk_id`, text, final score, corpus metadata.
+- Additional metadata: `content_id`, `legacy_chunk_ids`, `matched_scopes`, `rrf_score`, `rerank_score`.
 
-## Luồng tạo bài nộp
+## Submission Generation Flow
 
 ```mermaid
 sequenceDiagram
@@ -276,65 +276,65 @@ sequenceDiagram
     participant V as Validator
     participant Z as Artifact writer
 
-    S->>R: từng câu hỏi chưa có checkpoint
+    S->>R: each question not yet checkpointed
     R->>C: top-K hits
-    C->>L: text + citation khôi phục từ article corpus
-    L->>K: answer batch, ghi atomic định kỳ
-    K-->>S: resume bỏ qua id đã hoàn thành
-    L->>V: SubmissionRecord theo đúng thứ tự source
-    V->>Z: full coverage + schema hợp lệ
-    Z-->>Z: atomic results.json, ZIP phẳng
+    C->>L: text + citation restored from article corpus
+    L->>K: answer batch, written atomically periodically
+    K-->>S: resume, skipping completed ids
+    L->>V: SubmissionRecord in exact source order
+    V->>Z: full coverage + valid schema
+    Z-->>Z: atomic results.json, flat ZIP
 ```
 
-Điểm vào: `python scripts/generate_submission.py`.
+Entry point: `python scripts/generate_submission.py`.
 
-1. `JsonCompetitionQuestionSource` đọc JSON array, giữ nguyên question text, yêu cầu `id` là integer duy nhất và câu hỏi không rỗng.
-2. Với mỗi question chưa có trong checkpoint, retriever lấy mặc định 4 context. Mode `auto` dùng full hybrid pipeline; mode `baseline` chỉ dense.
-3. `JsonlLegalCitationResolver` load `law_articles.jsonl` một lần, parse `source_note_text` để khôi phục số/tên văn bản và số Điều. Nếu các article cùng một văn bản có source note thiếu trích yếu, resolver dùng trích yếu dài nhất của cùng document đã thấy. LLM không được dùng để bịa citation.
-4. `SubmissionCitationSelector` chọn citation cuối để nộp theo quota bảo thủ: exact lookup 1 article, câu một-vấn-đề 2 articles, câu đa-vấn-đề tối đa 5 articles. Answer vẫn nhận toàn bộ context đã retrieve.
-5. `GroundedLegalAnswerGenerator` render context theo thứ tự retrieval. Mỗi context tối đa 3.000 ký tự và tổng mặc định 16.000 ký tự; heading chứa `Điều ..., <tên văn bản>` khi citation có mặt. System prompt bắt buộc trả lời tiếng Việt chỉ dựa trên context, không bịa số Điều/thời hạn/mức tiền/tên văn bản.
-6. `Qwen/Qwen3-8B` (mặc định) sinh answer batch. Với CUDA, `--answer-load-in-4bit` dùng NF4/bitsandbytes; flag này bị từ chối trên CPU.
-7. Sau mỗi `--checkpoint-every` record mới (mặc định 1), checkpoint được ghi atomically. Lần chạy lại sẽ validate checkpoint và chỉ làm các id chưa có. Checkpoint chỉ bị xoá sau khi full artifact được tạo thành công.
-8. `SubmissionValidator` bảo đảm full coverage source question set, ID không trùng, question text giống nguyên văn, answer không rỗng, citation array không trùng và đúng format pipe-separated.
-9. `SubmissionArtifactWriter` ghi atomic `results.json`, tạo `submission.zip` chứa **duy nhất** `results.json` ở root, và tự kiểm tra cấu trúc ZIP.
+1. `JsonCompetitionQuestionSource` reads a JSON array, preserving the question text, requiring `id` to be a unique integer, and requiring non-empty questions.
+2. For each question not yet in the checkpoint, the retriever fetches 4 contexts by default. `auto` mode uses the full hybrid pipeline; `baseline` mode uses dense only.
+3. `JsonlLegalCitationResolver` loads `law_articles.jsonl` once, parses `source_note_text` to restore the document number/name and article number. If articles from the same document have source notes lacking an excerpt, the resolver uses the longest excerpt already seen from the same document. The LLM is never used to fabricate citations.
+4. `SubmissionCitationSelector` chooses the final citations to submit under conservative quotas: exact lookup → 1 article, single-issue question → 2 articles, multi-issue question → up to 5 articles. The answer still receives the entire retrieved context.
+5. `GroundedLegalAnswerGenerator` renders the context in retrieval order. Each context is at most 3,000 characters, with a default total of 16,000 characters; headings contain `Điều ..., <document name>` when a citation is present. The system prompt requires answering in Vietnamese, based solely on the context, without fabricating article numbers, deadlines, monetary amounts, or document names.
+6. `Qwen/Qwen3-8B` (default) generates answers in batches. On CUDA, `--answer-load-in-4bit` uses NF4/bitsandbytes; this flag is rejected on CPU.
+7. After every `--checkpoint-every` new records (default 1), the checkpoint is written atomically. A re-run will validate the checkpoint and only process the ids not yet done. The checkpoint is only deleted after the full artifact has been successfully created.
+8. `SubmissionValidator` ensures full coverage of the source question set, no duplicate IDs, question text matches verbatim, non-empty answers, no duplicate citation arrays, and correct pipe-separated format.
+9. `SubmissionArtifactWriter` writes `results.json` atomically, creates `submission.zip` containing **only** `results.json` at the root, and self-checks the ZIP structure.
 
-`results.json` có schema:
+The `results.json` schema is:
 
 ```json
 [
   {
     "id": 1,
-    "question": "Nguyên văn câu hỏi đầu vào",
-    "answer": "Câu trả lời grounded bằng tiếng Việt",
+    "question": "The original input question text",
+    "answer": "A grounded answer in Vietnamese",
     "relevant_docs": [
-      "04/2017/QH14|Luật 04/2017/QH14 Luật Hỗ trợ doanh nghiệp nhỏ và vừa"
+      "04/2017/QH14|Law 04/2017/QH14 Law on Support for Small and Medium Enterprises"
     ],
     "relevant_articles": [
-      "04/2017/QH14|Luật 04/2017/QH14 Luật Hỗ trợ doanh nghiệp nhỏ và vừa|Điều 4"
+      "04/2017/QH14|Law 04/2017/QH14 Law on Support for Small and Medium Enterprises|Article 4"
     ]
   }
 ]
 ```
 
-Citation không parse được không làm answer tự thất bại, nên `relevant_docs` và `relevant_articles` có thể rỗng. Tuy vậy, đây là tín hiệu cần audit corpus/source notes trước khi dùng artifact quan trọng.
+Citations that fail to parse don't cause the answer to fail automatically, so `relevant_docs` and `relevant_articles` can be empty. However, this is a signal that the corpus/source notes need to be audited before using the artifact for anything critical.
 
-## Cấu trúc thư mục
+## Directory Structure
 
 ```text
 .
 ├── README.md
 ├── notebooks/
-│   └── colab/Embed_qwen3_06_3b_latest.ipynb     # tạo embedding Parquet
+│   └── colab/Embed_qwen3_06_3b_latest.ipynb     # generates Parquet embeddings
 └── ai_legal_assistant/
     ├── requirements.txt
     ├── data/
-    │   ├── raw/                                  # câu hỏi competition, snapshot nguồn nếu có
+    │   ├── raw/                                  # competition questions, source snapshots if any
     │   ├── processed/                            # law_articles.jsonl, law_chunks.jsonl
     │   ├── embeddings/qwen3_06b/                 # embedded_*.parquet
     │   ├── indexes/                              # bm25_index.pkl
-    │   ├── eval/                                 # test set và corpus audit
-    │   ├── submissions/                          # output tạo bài nộp
-    │   └── transfer/                             # artifact chuyển/snapshot ngoài runtime
+    │   ├── eval/                                 # test set and corpus audit
+    │   ├── submissions/                          # submission generation output
+    │   └── transfer/                             # transfer/snapshot artifacts outside the runtime
     ├── docs/
     │   ├── query-expansion.md
     │   └── retrieval-evaluation.md
@@ -346,21 +346,21 @@ Citation không parse được không làm answer tự thất bại, nên `relev
     └── tests/unit/
 ```
 
-`data/` nằm trong `.gitignore`. Có thể có data cục bộ trong workspace hiện tại, nhưng một clone mới không nên giả định các file lớn, model cache hay Qdrant collection đã tồn tại.
+`data/` is in `.gitignore`. There may be local data in the current workspace, but a fresh clone should not assume large files, model caches, or a Qdrant collection already exist.
 
-## Cài đặt và cấu hình
+## Installation and Configuration
 
-### Điều kiện cần
+### Prerequisites
 
-- Python 3.10+ (code dùng type union `|`, dataclass slots và API thư viện hiện đại).
-- Qdrant đang chạy, mặc định `http://localhost:6333`.
-- Internet/Hugging Face cache để lần đầu tải dataset và model, hoặc cache model/dataset đã được chuẩn bị sẵn.
-- GPU CUDA rất nên có cho planner, reranker và đặc biệt answer model 8B. CPU chạy được về mặt code nhưng planner local có thể mất vài phút cho một query.
-- Docker là tuỳ chọn, chỉ để chạy Qdrant local.
+- Python 3.10+ (the code uses `|` type unions, dataclass slots, and modern library APIs).
+- Qdrant running, default `http://localhost:6333`.
+- Internet/Hugging Face cache access for the first-time download of the dataset and model, or pre-prepared model/dataset caches.
+- A CUDA GPU is highly recommended for the planner, reranker, and especially the 8B answer model. CPU works from a code perspective, but the local planner may take several minutes per query.
+- Docker is optional, only for running Qdrant locally.
 
-### Tạo môi trường Windows PowerShell
+### Setting up the Environment on Windows PowerShell
 
-Từ thư mục root repository:
+From the repository root directory:
 
 ```powershell
 Set-Location .\ai_legal_assistant
@@ -370,16 +370,16 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Scripts tự thêm `src/` vào `sys.path`, nên không cần `pip install -e .`. Nếu PowerShell chặn activate script, chỉ áp dụng policy cho process hiện tại:
+The scripts automatically add `src/` to `sys.path`, so `pip install -e .` is not needed. If PowerShell blocks the activation script, apply the policy only to the current process:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 .\.venv\Scripts\Activate.ps1
 ```
 
-### Chạy Qdrant local bằng Docker
+### Running Qdrant Locally with Docker
 
-Ví dụ sau tạo storage bền vững trong thư mục data của project:
+The following example creates persistent storage inside the project's data directory:
 
 ```powershell
 docker run --name qdrant-law --rm `
@@ -388,44 +388,44 @@ docker run --name qdrant-law --rm `
   qdrant/qdrant
 ```
 
-Không dùng `--rm` nếu muốn container vẫn tồn tại sau khi stop. Port 6333 là HTTP API; port 6334 là gRPC. Nếu dùng Qdrant Cloud, chỉ cần thay URL/API key; không chạy Docker local.
+Do not use `--rm` if you want the container to persist after being stopped. Port 6333 is the HTTP API; port 6334 is gRPC. If using Qdrant Cloud, just change the URL/API key; no local Docker run is needed.
 
-### Biến môi trường
+### Environment Variables
 
-Scripts đọc environment bằng `os.getenv`; không tự parse `.env`. Với PowerShell, set cho session hiện tại như sau:
+Scripts read the environment using `os.getenv`; they do not parse `.env` automatically. In PowerShell, set these for the current session as follows:
 
 ```powershell
 $env:QDRANT_URL = "http://localhost:6333"
 $env:QDRANT_COLLECTION = "law_chunks_qwen3_06b"
-$env:QDRANT_API_KEY = ""                 # chỉ đặt khi dùng Qdrant có API key
-$env:EMBEDDING_PROVIDER = "huggingface"  # hoặc ollama
+$env:QDRANT_API_KEY = ""                 # only set when using Qdrant with an API key
+$env:EMBEDDING_PROVIDER = "huggingface"  # or ollama
 $env:EMBEDDING_MODEL = "Qwen/Qwen3-Embedding-0.6B"
 $env:QUERY_PLANNER_MODEL = "Qwen/Qwen3-0.6B"
 $env:RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
 $env:ANSWER_MODEL = "Qwen/Qwen3-8B"
 ```
 
-| Biến | Dùng ở | Giá trị mặc định / ý nghĩa |
+| Variable | Used In | Default Value / Meaning |
 |---|---|---|
 | `QDRANT_URL` | retrieval, import, audit, submission | `http://localhost:6333` |
 | `QDRANT_COLLECTION` | retrieval, import, audit, submission | `law_chunks_qwen3_06b` |
 | `QDRANT_API_KEY` | Qdrant client | optional |
-| `EMBEDDING_PROVIDER` | retrieval/submission/evaluation | `huggingface` hoặc `ollama` |
+| `EMBEDDING_PROVIDER` | retrieval/submission/evaluation | `huggingface` or `ollama` |
 | `EMBEDDING_MODEL` | embedder | `Qwen/Qwen3-Embedding-0.6B` |
-| `EMBEDDING_DEVICE` | chỉ submission script | ví dụ `cuda`, `cuda:0`, `cpu` |
+| `EMBEDDING_DEVICE` | submission script only | e.g. `cuda`, `cuda:0`, `cpu` |
 | `OLLAMA_URL` | Ollama embedder | `http://localhost:11434` |
-| `QUERY_EMBEDDING_INSTRUCTION` | format query embedding | instruction retrieval mặc định trong code |
-| `QUERY_PLANNER_MODEL`, `QUERY_PLANNER_DEVICE` | auto planning | `Qwen/Qwen3-0.6B`, device tự chọn |
+| `QUERY_EMBEDDING_INSTRUCTION` | query embedding format | default retrieval instruction in code |
+| `QUERY_PLANNER_MODEL`, `QUERY_PLANNER_DEVICE` | auto planning | `Qwen/Qwen3-0.6B`, auto-selected device |
 | `RERANKER_MODEL`, `RERANKER_DEVICE` | cross encoder | `BAAI/bge-reranker-v2-m3` |
-| `ANSWER_MODEL`, `ANSWER_DEVICE` | submission answer model | `Qwen/Qwen3-8B`, device tự chọn |
+| `ANSWER_MODEL`, `ANSWER_DEVICE` | submission answer model | `Qwen/Qwen3-8B`, auto-selected device |
 
-Với `EMBEDDING_PROVIDER=ollama`, model/query formatting phải tương thích với collection đã embed. Đừng đánh giá collection Qwen3 SentenceTransformers bằng adapter Ollama nếu không biết chúng tạo vector tương đương; chất lượng benchmark sẽ không còn có ý nghĩa.
+With `EMBEDDING_PROVIDER=ollama`, the model/query formatting must be compatible with the already-embedded collection. Do not evaluate a Qwen3 SentenceTransformers collection with an Ollama adapter unless you know they produce equivalent vectors; the benchmark quality will no longer be meaningful.
 
-## Vận hành các pipeline
+## Operating the Pipelines
 
-Các lệnh dưới đây đều được chạy từ `ai_legal_assistant/` sau khi activate virtual environment.
+The commands below are all run from `ai_legal_assistant/` after activating the virtual environment.
 
-### A. Tái tạo corpus từ đầu
+### A. Rebuilding the Corpus from Scratch
 
 #### 1. Ingest
 
@@ -438,11 +438,11 @@ Output:
 - `data/processed/law_articles.jsonl`
 - `data/processed/law_chunks.jsonl`
 
-Lệnh hiện không expose `--limit` hay `--output-dir` ở CLI; use case có hỗ trợ chúng nhưng script dùng default. Nếu cần test nhỏ, gọi use case từ Python hoặc thêm flag một cách có chủ đích.
+The command currently does not expose `--limit` or `--output-dir` on the CLI; the use case supports them, but the script uses the defaults. For small-scale testing, call the use case from Python or add the flag deliberately.
 
-#### 2. Tạo embedding Parquet
+#### 2. Generate Parquet Embeddings
 
-Mở notebook `notebooks/colab/Embed_qwen3_06_3b_latest.ipynb` bằng Colab/Jupyter, chỉnh `BASE_DIR`, `CHUNKS_PATH`, `OUT_DIR`, `START_SHARD`, `END_SHARD` phù hợp storage của bạn, rồi chạy cell embedding. Mục tiêu là có dãy liên tục:
+Open the notebook `notebooks/colab/Embed_qwen3_06_3b_latest.ipynb` in Colab/Jupyter, adjust `BASE_DIR`, `CHUNKS_PATH`, `OUT_DIR`, `START_SHARD`, `END_SHARD` to fit your storage, then run the embedding cells. The goal is to have a continuous sequence:
 
 ```text
 data/embeddings/qwen3_06b/embedded_000.parquet
@@ -450,9 +450,9 @@ data/embeddings/qwen3_06b/embedded_001.parquet
 ...
 ```
 
-Notebook có checkpoint theo file: shard đã tồn tại sẽ bị bỏ qua. Tuy nhiên không nên ghép shard tạo từ những corpus/model/payload schema khác nhau.
+The notebook has file-based checkpointing: existing shards are skipped. However, you should not combine shards created from different corpus/model/payload schemas.
 
-#### 3. Import vào Qdrant
+#### 3. Import into Qdrant
 
 ```powershell
 python scripts/import_parquet_to_qdrant.py `
@@ -461,9 +461,9 @@ python scripts/import_parquet_to_qdrant.py `
   --recreate
 ```
 
-`--recreate` là thao tác phá huỷ collection đích. Bỏ flag này khi muốn tiếp tục import vào collection hợp lệ đang có. Khi resume từ shard nào đó, dùng `--start-file <n>`; cần hiểu rõ các shard trước đã được import với cùng collection/payload.
+`--recreate` is a destructive operation on the target collection. Omit this flag when you want to continue importing into an existing valid collection. When resuming from a particular shard, use `--start-file <n>`; you need to be sure the earlier shards have already been imported with the same collection/payload.
 
-#### 4. Build BM25 từ cùng corpus
+#### 4. Build BM25 from the Same Corpus
 
 ```powershell
 python scripts/build_bm25_index.py `
@@ -471,13 +471,13 @@ python scripts/build_bm25_index.py `
   --output-path data/indexes/bm25_index.pkl
 ```
 
-Ví dụ ép regex tokenizer để reproduce trong môi trường không có tokenizer tiếng Việt:
+Example of forcing the regex tokenizer to reproduce results in an environment without a Vietnamese tokenizer:
 
 ```powershell
 python scripts/build_bm25_index.py --tokenizer regex
 ```
 
-#### 5. Audit coverage
+#### 5. Coverage Audit
 
 ```powershell
 python scripts/audit_qdrant_corpus.py `
@@ -485,9 +485,9 @@ python scripts/audit_qdrant_corpus.py `
   --collection law_chunks_qwen3_06b
 ```
 
-Không chuyển sang benchmark/submission nếu `missing_in_qdrant` không bằng 0, trừ khi bạn đã hiểu chính xác lý do (ví dụ collection intentionally chỉ chứa một subset).
+Do not proceed to benchmarking/submission if `missing_in_qdrant` is not zero, unless you have a precise understanding of why (e.g. the collection intentionally contains only a subset).
 
-### B. Xem query plan trước khi truy vấn
+### B. Viewing the Query Plan Before Querying
 
 ```powershell
 python scripts/plan_legal_query.py `
@@ -495,11 +495,11 @@ python scripts/plan_legal_query.py `
   --planner-model "Qwen/Qwen3-0.6B"
 ```
 
-Kiểm tra `warnings`, evidence, `query_type`, variant và lexical term. Một plan original-only có warning là degradation an toàn, không phải answer pháp lý.
+Check the `warnings`, evidence, `query_type`, variants, and lexical terms. An original-only plan with a warning is a safe degradation, not a legal answer.
 
-### C. Truy vấn tương tác
+### C. Interactive Querying
 
-Auto mode (mặc định; bật query planning, BM25 và reranker):
+Auto mode (default; enables query planning, BM25, and reranker):
 
 ```powershell
 python scripts/query_qdrant.py `
@@ -508,7 +508,7 @@ python scripts/query_qdrant.py `
   --per-query-top-k 20
 ```
 
-Dense-only baseline, hữu ích cho A/B test:
+Dense-only baseline, useful for A/B testing:
 
 ```powershell
 python scripts/query_qdrant.py `
@@ -517,32 +517,32 @@ python scripts/query_qdrant.py `
   --top-k 5
 ```
 
-Auto mode nhưng tắt từng stage để phân tích:
+Auto mode with individual stages disabled for analysis:
 
 ```powershell
-# vẫn planning nhưng chỉ dense, không BM25 và không rerank
-python scripts/query_qdrant.py "Câu hỏi pháp lý" `
+# still planning, but dense-only, no BM25 and no reranking
+python scripts/query_qdrant.py "Legal question" `
   --disable-bm25 `
   --disable-reranker
 ```
 
-Các knob retrieval đáng chú ý:
+Notable retrieval knobs:
 
-| Flag | Default | Ý nghĩa |
+| Flag | Default | Meaning |
 |---|---:|---|
-| `--top-k` | 10 | số hit final tối đa |
-| `--per-query-top-k` | 20 | content duy nhất giữ lại cho mỗi query sau dedup |
-| `--oversample-factor` | 5 | hệ số lấy hit thô trước dedup |
-| `--bm25-weight` | 0.7 | weight list sparse trong local RRF |
-| `--candidate-pool-size` | 50 | pool trước rerank |
-| `--scope-candidates-per-branch` | 5 | candidate reserve cho mỗi scope |
-| `--max-chunks-per-article` | 2 | cap article cho query thường |
-| `--ambiguous-max-chunks-per-article` | 1 | cap article cho query mơ hồ |
-| `--scope-relevance-margin` | 0.15 | ngưỡng weak candidate sau scope winner |
+| `--top-k` | 10 | maximum number of final hits |
+| `--per-query-top-k` | 20 | unique content kept per query after dedup |
+| `--oversample-factor` | 5 | factor for raw hits fetched before dedup |
+| `--bm25-weight` | 0.7 | weight of the sparse list in local RRF |
+| `--candidate-pool-size` | 50 | pool size before reranking |
+| `--scope-candidates-per-branch` | 5 | reserved candidates per scope |
+| `--max-chunks-per-article` | 2 | article cap for normal queries |
+| `--ambiguous-max-chunks-per-article` | 1 | article cap for ambiguous queries |
+| `--scope-relevance-margin` | 0.15 | threshold for weak candidates after the scope winner |
 
-### D. Tạo artifact competition
+### D. Generating the Competition Artifact
 
-Ví dụ GPU CUDA với batch nhỏ, có checkpoint:
+Example with a CUDA GPU, small batch, with checkpointing:
 
 ```powershell
 python scripts/generate_submission.py `
@@ -558,7 +558,7 @@ python scripts/generate_submission.py `
   --checkpoint-every 1
 ```
 
-Để chạy dense baseline cho comparison:
+To run the dense baseline for comparison:
 
 ```powershell
 python scripts/generate_submission.py `
@@ -566,14 +566,14 @@ python scripts/generate_submission.py `
   --output-dir data/submissions/baseline
 ```
 
-Kết quả xuất ra:
+The output produced is:
 
 ```text
-data/submissions/<tên-output>/results.json
-data/submissions/<tên-output>/submission.zip
+data/submissions/<output-name>/results.json
+data/submissions/<output-name>/submission.zip
 ```
 
-Validate lại trước khi upload quota:
+Validate before uploading to the quota:
 
 ```powershell
 python scripts/validate_submission.py `
@@ -582,7 +582,7 @@ python scripts/validate_submission.py `
   --zip data/submissions/private_candidate/submission.zip
 ```
 
-Nếu có gold labels local, đo macro Precision/Recall/F2 cho citation trước khi nộp:
+If local gold labels are available, measure macro Precision/Recall/F2 for citations before submitting:
 
 ```powershell
 python scripts/evaluate_submission.py `
@@ -590,19 +590,19 @@ python scripts/evaluate_submission.py `
   --gold data/eval/submission_gold.json
 ```
 
-### E. Import snapshot/transfer có sẵn
+### E. Importing an Existing Snapshot/Transfer
 
-Thư mục `data/transfer/` chỉ là artifact chuyển giao/snapshot, không phải input trực tiếp cho script. Nếu restore Qdrant từ snapshot, làm theo cơ chế restore của đúng phiên bản Qdrant và sau đó chạy `audit_qdrant_corpus.py`; đừng coi snapshot là bằng chứng rằng collection tương thích với corpus hiện tại.
+The `data/transfer/` directory is only a transfer/snapshot artifact, not a direct input for the scripts. If restoring Qdrant from a snapshot, follow the restore mechanism appropriate for your Qdrant version, and afterward run `audit_qdrant_corpus.py`; do not treat a snapshot as proof that the collection is compatible with the current corpus.
 
-## Dữ liệu, schema và artifact
+## Data, Schema and Artifacts
 
 ### `law_articles.jsonl`
 
-Mỗi dòng là một `LawArticle`, bao gồm `article_id`, subject/topic/chapter/article metadata, source note/link/URL, `text`, `char_len`, `word_count`. Đây là nguồn authoritative trong dự án để citation resolver đối chiếu `article_id` và lấy `source_note_text`.
+Each line is a `LawArticle`, including `article_id`, subject/topic/chapter/article metadata, source note/link/URL, `text`, `char_len`, `word_count`. This is the authoritative source in the project used by the citation resolver to cross-reference `article_id` and retrieve `source_note_text`.
 
 ### `law_chunks.jsonl`
 
-Mỗi dòng là một `LawChunk` có các trường cốt lõi:
+Each line is a `LawChunk` with the following core fields:
 
 ```json
 {
@@ -621,28 +621,28 @@ Mỗi dòng là một `LawChunk` có các trường cốt lõi:
 }
 ```
 
-### Parquet embedding
+### Embedding Parquet
 
-Mỗi `embedded_*.parquet` bắt buộc có `point_id` và `vector`. Các cột metadata/payload còn lại đi qua Qdrant, gồm `text`, `chunk_id`, `article_id` và ngữ cảnh pháp lý. Import script từ chối vector không có đúng 1.024 phần tử.
+Each `embedded_*.parquet` file must contain `point_id` and `vector`. The remaining metadata/payload columns pass through to Qdrant, including `text`, `chunk_id`, `article_id`, and legal context. The import script rejects vectors that don't have exactly 1,024 elements.
 
-### BM25 pickle
+### BM25 Pickle
 
-`bm25_index.pkl` là Python pickle nội bộ, không phải format an toàn để nhận từ nguồn không tin cậy. Chỉ load index do pipeline của bạn tạo hoặc artifact bạn tin cậy. Payload chứa `BM25Index` và config tokenizer để query được tokenize nhất quán.
+`bm25_index.pkl` is an internal Python pickle, not a safe format to accept from untrusted sources. Only load an index generated by your own pipeline or an artifact you trust. The payload contains a `BM25Index` and tokenizer config so queries are tokenized consistently.
 
-### Test set retrieval
+### Retrieval Test Set
 
-`data/eval/retrieval_testset.jsonl` dùng một JSON object mỗi dòng. Mỗi case phải chọn **đúng một** level relevance:
+`data/eval/retrieval_testset.jsonl` uses one JSON object per line. Each case must select **exactly one** relevance level:
 
 ```json
 {"id":"capital-001","query":"Thời hạn góp đủ vốn điều lệ là bao lâu?","relevant_chunk_ids":["chunk-id"]}
 {"id":"tax-001","query":"Khi nào phải đăng ký mã số thuế?","relevant_article_ids":["article-id"]}
 ```
 
-Không dùng đồng thời `relevant_chunk_ids` và `relevant_article_ids` trong một case. Chunk-level đo passage retrieval chặt hơn; article-level phù hợp khi nhiều Khoản/Điểm trong cùng Điều đều chấp nhận được.
+Do not use `relevant_chunk_ids` and `relevant_article_ids` simultaneously in a single case. Chunk-level measures passage retrieval more strictly; article-level is appropriate when multiple Khoản/Điểm within the same Article are all acceptable.
 
-## Đánh giá chất lượng retrieval
+## Retrieval Quality Evaluation
 
-Chạy dense baseline:
+Run the dense baseline:
 
 ```powershell
 python scripts/evaluate_retrieval.py `
@@ -651,7 +651,7 @@ python scripts/evaluate_retrieval.py `
   --model "Qwen/Qwen3-Embedding-0.6B"
 ```
 
-Đánh giá expansion + dense (không BM25/reranker):
+Evaluate expansion + dense (without BM25/reranker):
 
 ```powershell
 python scripts/evaluate_retrieval.py `
@@ -660,7 +660,7 @@ python scripts/evaluate_retrieval.py `
   --per-query-top-k 20
 ```
 
-Đánh giá full hybrid:
+Evaluate full hybrid:
 
 ```powershell
 python scripts/evaluate_retrieval.py `
@@ -671,71 +671,72 @@ python scripts/evaluate_retrieval.py `
   --per-query-top-k 20
 ```
 
-Evaluator chạy từng case đến `max(cutoffs)`, sau đó macro-average các case:
+The evaluator runs each case up to `max(cutoffs)`, then macro-averages across cases:
 
 - `Recall@K = |unique(retrieved[:K]) ∩ relevant| / |relevant|`.
-- `MRR@K = 1 / rank` của relevant hit đầu tiên trong top K, hoặc `0` nếu không có.
+- `MRR@K = 1 / rank` of the first relevant hit within the top K, or `0` if there is none.
 
-Khi case dùng chunk label, evaluator so `hit.chunk_id`; khi dùng article label, nó so `hit.metadata["article_id"]`. Hãy báo cáo tối thiểu ba run trên **cùng một test set**: dense baseline, expanded/hybrid chưa rerank, full hybrid + rerank. Không kết luận query expansion tốt/chưa tốt từ một ví dụ đơn lẻ.
+When a case uses a chunk label, the evaluator compares against `hit.chunk_id`; when it uses an article label, it compares against `hit.metadata["article_id"]`. Report at least three runs on the **same test set**: dense baseline, expanded/hybrid without reranking, and full hybrid + reranking. Do not conclude that query expansion is good/bad based on a single example.
 
-## An toàn, tính đúng đắn và giới hạn
+## Safety, Correctness and Limitations
 
-### Guardrail đã có
+### Existing Guardrails
 
-- Planner JSON được constraint schema ở generation và validate lại trong Python.
-- Analysis evidence phải là quote xuất hiện trong query; evidence giả làm plan rơi về original-only.
-- Expansion không được bịa số, thời lượng, phủ định hay loại hình doanh nghiệp.
-- Lỗi planner/exansion chỉ degrade một query, không dừng toàn bộ submission batch.
-- Citation được derive từ corpus JSONL, không lấy trực tiếp từ answer model.
-- Submission được validate coverage/schema và ghi atomically; ZIP bị bắt buộc chỉ có `results.json` ở root.
-- Vector dimension, input Parquet, shard continuity, BM25 parameter và positive retrieval config đều được validate.
+- The planner JSON is schema-constrained at generation time and re-validated in Python.
+- Analysis evidence must be a quote that appears in the query; fabricated evidence causes the plan to fall back to original-only.
+- Expansion must not fabricate numbers, durations, negations, or business entity types.
+- Planner/expansion errors only degrade a single query; they do not stop the entire submission batch.
+- Citations are derived from the corpus JSONL, not taken directly from the answer model.
+- Submissions are validated for coverage/schema and written atomically; the ZIP is required to contain only `results.json` at the root.
+- Vector dimensions, Parquet input, shard continuity, BM25 parameters, and positive retrieval configuration are all validated.
 
-### Điều guardrail không bảo đảm
+### What the Guardrails Do NOT Guarantee
 
-- Retrieval có thể lấy sai căn cứ; answer model vẫn có thể diễn giải chưa chuẩn trong phạm vi context đã cung cấp.
-- Citation resolver là regex trên `source_note_text`; metadata nguồn không theo pattern sẽ không có citation.
-- Planner local 0.6B có thể sinh expansion yếu/sai format. Code fail closed, nhưng original-only retrieval không đồng nghĩa câu trả lời luôn chính xác.
-- Source dataset, embedding corpus, Qdrant collection và BM25 index có thể lệch version nếu vận hành không theo bundle.
-- Hệ thống chưa có version registry/model registry, telemetry, access control, rate limit, API server hoặc human review workflow.
+- Retrieval can pull the wrong grounds; the answer model may still interpret them imperfectly even within the provided context.
+- The citation resolver is a regex over `source_note_text`; source metadata that doesn't follow the pattern will have no citation.
+- The local 0.6B planner may generate weak/malformed expansions. The code fails closed, but an original-only retrieval does not mean the answer is always correct.
+- The source dataset, embedding corpus, Qdrant collection, and BM25 index can drift out of sync if not operated as a bundle.
+- The system does not yet have a version registry/model registry, telemetry, access control, rate limiting, API server, or human review workflow.
 
-### Invariant vận hành quan trọng
+### Important Operational Invariants
 
-1. `law_chunks.jsonl`, Parquet, Qdrant collection và BM25 index phải cùng một phiên bản corpus.
-2. Query embedder phải tương thích model/instruction/max length/normalization đã dùng lúc embedding corpus.
-3. Không dùng `--recreate` vào collection đang phục vụ mà chưa có backup/approval.
-4. Không load `.pkl` lạ; pickle có thể thực thi code khi deserialization.
-5. Giữ answer batch nhỏ và quan sát VRAM; tăng batch không tự động làm inference tốt hơn.
-6. Với use case pháp lý thực tế, thêm review chuyên gia, logging có kiểm soát PII, evaluation phân tầng và cơ chế cập nhật hiệu lực văn bản.
+1. `law_chunks.jsonl`, the Parquet files, the Qdrant collection, and the BM25 index must all be the same corpus version.
+2. The query embedder must be compatible with the model/instruction/max length/normalization used when embedding the corpus.
+3. Do not use `--recreate` on a collection in active service without a backup/approval.
+4. Do not load an unfamiliar `.pkl` file; pickle can execute code upon deserialization.
+5. Keep answer batches small and monitor VRAM; increasing the batch size does not automatically make inference better.
+6. For real-world legal use cases, add expert review, controlled PII logging, tiered evaluation, and a mechanism for updating legal document validity.
 
-## Kiểm thử và xử lý sự cố
+## Testing and Troubleshooting
 
-### Unit test
+### Unit Tests
 
 ```powershell
 Set-Location .\ai_legal_assistant
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-Test không cần Qdrant thật hay tải model thật: chúng dùng fake embedder/vector store/planner/reranker/LLM. Những gì đang được cover gồm normalization/guardrail planning, content dedup + fusion + scope selection, BM25/tokenizer, metrics, citation resolution, checkpoint, validator và ZIP phẳng.
+Tests do not require a real Qdrant instance or real model loading: they use fake embedders/vector stores/planners/rerankers/LLMs. Areas currently covered include normalization/guardrail planning, content dedup + fusion + scope selection, BM25/tokenizer, metrics, citation resolution, checkpointing, validator, and flat ZIP structure.
 
-### Sự cố thường gặp
+### Common Issues
 
-| Triệu chứng | Nguyên nhân khả dĩ | Hướng xử lý |
+| Symptom | Possible Cause | Resolution |
 |---|---|---|
-| Không kết nối được Qdrant | service chưa chạy hoặc sai `QDRANT_URL` | kiểm tra container/service, URL, network và API key |
-| `dimension ... expects 1024` | collection/model embedding không cùng cấu hình | dùng model/corpus đúng cặp hoặc tạo collection mới đúng dimension |
-| `No embedded_*.parquet files found` | sai đường dẫn hoặc chưa chạy notebook | kiểm tra `--input-dir`, tạo shard liên tục |
-| `Missing Parquet shards` | shard bị thiếu | regenerate/copy shard thiếu, không import corpus dở dang |
-| BM25 index không tìm được hoặc lỗi file | index chưa build/khác corpus | rebuild bằng đúng `law_chunks.jsonl` hiện hành |
-| Planner rất chậm trên CPU | Qwen generation chạy local CPU | dùng CUDA, model server, hoặc baseline để benchmark retrieval |
-| Plan chỉ có original query + warning | JSON/evidence/expansion không qua guardrail | inspect bằng `plan_legal_query.py`; đây là fail-closed expected behavior |
-| Submission resume bị lỗi | checkpoint không khớp question source hoặc malformed | giữ nguyên source question file; sửa/xoá checkpoint chỉ sau khi kiểm tra IDs |
-| Citation arrays rỗng | `source_note_text` không parse được | audit JSONL source note, cải thiện resolver/pattern trước khi upload |
-| Out-of-memory answer model | 8B model/context/batch quá lớn | dùng CUDA, `--answer-load-in-4bit`, giảm batch/context, hoặc model nhỏ hơn đã được đánh giá |
+| Cannot connect to Qdrant | service not running or wrong `QDRANT_URL` | check the container/service, URL, network, and API key |
+| `dimension ... expects 1024` | collection/embedding model configuration mismatch | use the correct model/corpus pair or create a new collection with the correct dimension |
+| `No embedded_*.parquet files found` | wrong path or notebook not yet run | check `--input-dir`, generate a continuous shard sequence |
+| `Missing Parquet shards` | a shard is missing | regenerate/copy the missing shard, do not import an incomplete corpus |
+| BM25 index not found or file error | index not yet built/from a different corpus | rebuild using the current `law_chunks.jsonl` |
+| Planner very slow on CPU | Qwen generation running locally on CPU | use CUDA, a model server, or the baseline to benchmark retrieval |
+| Plan only contains original query + warning | JSON/evidence/expansion did not pass the guardrail | inspect using `plan_legal_query.py`; this is the expected fail-closed behavior |
+| Submission resume fails | checkpoint doesn't match the question source or is malformed | keep the source question file unchanged; only fix/delete the checkpoint after verifying the IDs |
+| Citation arrays are empty | `source_note_text` could not be parsed | audit the JSONL source notes, improve the resolver/pattern before uploading |
+| Out-of-memory answer model | 8B model/context/batch too large | use CUDA, `--answer-load-in-4bit`, reduce batch/context, or use a smaller already-evaluated model |
 
-## Tài liệu liên quan
+## Related Documentation
 
-- [Query expansion](ai_legal_assistant/docs/query-expansion.md): quy tắc planning, hybrid fusion và A/B retrieval.
-- [Retrieval evaluation](ai_legal_assistant/docs/retrieval-evaluation.md): test set và cách đọc Recall/MRR.
+- [Query expansion](ai_legal_assistant/docs/query-expansion.md): planning rules, hybrid fusion, and A/B retrieval.
+- [Retrieval evaluation](ai_legal_assistant/docs/retrieval-evaluation.md): test set and how to read Recall/MRR.
 
-Các tài liệu này bổ sung chi tiết cho README; README là điểm bắt đầu vận hành toàn bộ flow từ corpus đến artifact cuối.
+These documents supplement the README with further detail; the README is the starting point for operating the entire flow from corpus to final artifact.
+
